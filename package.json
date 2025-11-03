@@ -1,0 +1,41 @@
+{
+  "name": "group-hardhat",
+  "version": "1.0.0",
+  "description": "基于 Merkle Tree 的去中心化群聊系统智能合约",
+  "main": "index.js",
+  "scripts": {
+    "test": "hardhat test",
+    "test:factory": "hardhat test test/CommunityFactory.ts",
+    "test:community": "hardhat test test/Community.ts",
+    "test:room": "hardhat test test/Room.ts",
+    "test:integration": "hardhat test test/Integration.ts",
+    "test:solidity": "hardhat test solidity",
+    "compile": "hardhat compile",
+    "clean": "hardhat clean",
+    "deploy:local": "hardhat ignition deploy ignition/modules/CommunityFactory.ts",
+    "deploy:sepolia": "hardhat ignition deploy --network sepolia ignition/modules/CommunityFactory.ts",
+    "script:create-community": "hardhat run scripts/create-community.ts",
+    "script:create-room": "hardhat run scripts/create-room.ts"
+  },
+  "keywords": [
+    "blockchain",
+    "smart-contracts",
+    "hardhat",
+    "merkle-tree",
+    "chat",
+    "群聊"
+  ],
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "@nomicfoundation/hardhat-ignition": "^3.0.3",
+    "@nomicfoundation/hardhat-toolbox-viem": "^5.0.0",
+    "@openzeppelin/contracts": "^5.4.0",
+    "@types/node": "^22.18.13",
+    "forge-std": "github:foundry-rs/forge-std#v1.9.4",
+    "hardhat": "^3.0.10",
+    "typescript": "~5.8.0",
+    "viem": "^2.38.6"
+  },
+  "type": "module"
+}
