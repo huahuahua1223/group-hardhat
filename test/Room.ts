@@ -126,7 +126,7 @@ describe("Room", async function () {
       toBlock: createReceipt.blockNumber,
     });
 
-    const roomAddress = roomLogs[0].args.room as Address;
+    const roomAddress = (roomLogs[0] as any).args.room as Address;
     room = await viem.getContractAt("Room", roomAddress);
   });
 
@@ -191,9 +191,9 @@ describe("Room", async function () {
       });
 
       assert.equal(logs.length, 1);
-      assert.equal(logs[0].args.user?.toLowerCase(), user2.account.address.toLowerCase());
-      assert.equal(logs[0].args.inviter?.toLowerCase(), user1.account.address.toLowerCase());
-      assert.equal(logs[0].args.fee, parseEther("10"));
+      assert.equal((logs[0] as any).args.user?.toLowerCase(), user2.account.address.toLowerCase());
+      assert.equal((logs[0] as any).args.inviter?.toLowerCase(), user1.account.address.toLowerCase());
+      assert.equal((logs[0] as any).args.fee, parseEther("10"));
 
       // 验证成员状态
       const isMember = await room.read.isMember([user2.account.address]);
@@ -267,7 +267,7 @@ describe("Room", async function () {
       });
 
       assert.equal(logs.length, 1);
-      assert.equal(logs[0].args.user?.toLowerCase(), user2.account.address.toLowerCase());
+      assert.equal((logs[0] as any).args.user?.toLowerCase(), user2.account.address.toLowerCase());
 
       // 验证状态
       const isMember = await room.read.isMember([user2.account.address]);
@@ -285,7 +285,7 @@ describe("Room", async function () {
       await room.write.invite([user2.account.address], { account: user1.account });
 
       // User2 离开
-      const tx = await room.write.leave([], { account: user2.account });
+      const tx = await room.write.leave({ account: user2.account });
       const receipt = await publicClient.waitForTransactionReceipt({ hash: tx });
 
       // 检查事件
@@ -298,7 +298,7 @@ describe("Room", async function () {
       });
 
       assert.equal(logs.length, 1);
-      assert.equal(logs[0].args.user?.toLowerCase(), user2.account.address.toLowerCase());
+      assert.equal((logs[0] as any).args.user?.toLowerCase(), user2.account.address.toLowerCase());
 
       // 验证状态
       const isMember = await room.read.isMember([user2.account.address]);
@@ -336,10 +336,10 @@ describe("Room", async function () {
       });
 
       assert.equal(logs.length, 1);
-      assert.equal(logs[0].args.sender?.toLowerCase(), user1.account.address.toLowerCase());
-      assert.equal(logs[0].args.kind, 0);
-      assert.equal(logs[0].args.seq, 1n);
-      assert.equal(logs[0].args.cid, cid);
+      assert.equal((logs[0] as any).args.sender?.toLowerCase(), user1.account.address.toLowerCase());
+      assert.equal((logs[0] as any).args.kind, 0);
+      assert.equal((logs[0] as any).args.seq, 1n);
+      assert.equal((logs[0] as any).args.cid, cid);
 
       // 验证存储
       const messageCount = await room.read.messageCount();
@@ -449,8 +449,8 @@ describe("Room", async function () {
       });
 
       assert.equal(logs.length, 1);
-      assert.equal(logs[0].args.epoch, epochBefore + 1n);
-      assert.equal(logs[0].args.metadataHash, metadataHash);
+      assert.equal((logs[0] as any).args.epoch, epochBefore + 1n);
+      assert.equal((logs[0] as any).args.metadataHash, metadataHash);
 
       const epochAfter = await room.read.groupKeyEpoch();
       assert.equal(epochAfter, epochBefore + 1n);

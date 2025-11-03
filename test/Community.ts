@@ -71,9 +71,9 @@ describe("Community", async function () {
       });
 
       assert.equal(logs.length, 1);
-      assert.equal(logs[0].args.epoch, 1n);
-      assert.equal(logs[0].args.root, root);
-      assert.equal(logs[0].args.uri, uri);
+      assert.equal((logs[0] as any).args.epoch, 1n);
+      assert.equal((logs[0] as any).args.root, root);
+      assert.equal((logs[0] as any).args.uri, uri);
 
       // 验证状态
       const currentEpoch = await community.read.currentEpoch();
@@ -215,9 +215,9 @@ describe("Community", async function () {
       });
 
       assert.equal(logs.length, 1);
-      assert.equal(logs[0].args.account?.toLowerCase(), user1.account.address.toLowerCase());
-      assert.equal(logs[0].args.tier, 3n);
-      assert.equal(logs[0].args.epoch, 1n);
+      assert.equal((logs[0] as any).args.account?.toLowerCase(), user1.account.address.toLowerCase());
+      assert.equal((logs[0] as any).args.tier, 3n);
+      assert.equal((logs[0] as any).args.epoch, 1n);
 
       // 验证状态
       const isMember = await community.read.isMember([user1.account.address]);
@@ -327,10 +327,10 @@ describe("Community", async function () {
       });
 
       assert.equal(logs.length, 1);
-      assert.equal(logs[0].args.owner?.toLowerCase(), user1.account.address.toLowerCase());
-      assert.equal(logs[0].args.inviteFee, parseEther("10"));
+      assert.equal((logs[0] as any).args.owner?.toLowerCase(), user1.account.address.toLowerCase());
+      assert.equal((logs[0] as any).args.inviteFee, parseEther("10"));
 
-      const roomAddress = logs[0].args.room as Address;
+      const roomAddress = (logs[0] as any).args.room as Address;
       assert.notEqual(roomAddress, "0x0000000000000000000000000000000000000000");
 
       // 验证 Room 已正确初始化

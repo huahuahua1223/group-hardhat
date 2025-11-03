@@ -218,7 +218,7 @@ describe("集成测试：完整群聊流程", async function () {
     console.log("\n🚪 第十步：Bob 离开小群...");
     
     const epochBefore = await room.read.groupKeyEpoch();
-    await room.write.leave([], { account: bob.account });
+    await room.write.leave({ account: bob.account });
     const epochAfter = await room.read.groupKeyEpoch();
 
     const bobIsMember = await room.read.isMember([bob.account.address]);

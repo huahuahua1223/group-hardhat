@@ -64,9 +64,9 @@ describe("CommunityFactory", async function () {
     });
 
     assert.equal(logs.length, 1);
-    assert.equal(logs[0].args.owner?.toLowerCase(), communityOwner.account.address.toLowerCase());
+    assert.equal((logs[0] as any).args.owner?.toLowerCase(), communityOwner.account.address.toLowerCase());
 
-    const communityAddress = logs[0].args.community as Address;
+    const communityAddress = (logs[0] as any).args.community as Address;
     assert.notEqual(communityAddress, "0x0000000000000000000000000000000000000000");
 
     // 验证 Community 合约已正确初始化
