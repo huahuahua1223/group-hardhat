@@ -18,3 +18,10 @@
 
 # Hardhat coverage reports
 /coverage
+
+# Merkle Tree 生成的输出文件
+/output/*.json
+
+# 真实的白名单 CSV 文件（保留示例文件）
+/data/*.csv
+!/data/whitelist.example.csv

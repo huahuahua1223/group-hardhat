@@ -120,12 +120,29 @@ npm run test:room          # Room 测试
 npm run test:integration   # 集成测试
 ```
 
-### 运行演示
+### 生成 Merkle Tree 和 Proof
 
 ```bash
-# Merkle Tree 演示
-npm run script:demo-merkle
+# 1. 准备 CSV 白名单文件（参考 data/whitelist.example.csv）
+# 2. 生成 Merkle Tree 和所有用户的 Proof
+npm run merkle:generate
 
+# 或指定自定义 CSV 文件路径
+# Windows PowerShell:
+$env:CSV_PATH="./data/my-whitelist.csv"; npm run merkle:generate
+
+# Linux/Mac:
+CSV_PATH=./data/my-whitelist.csv npm run merkle:generate
+```
+
+生成的文件将保存在 `output/` 目录：
+- `merkle-proofs-*.json` - 完整数据（包含所有用户的 Proof）
+- `merkle-metadata-*.json` - 元数据（用于链上设置 Merkle Root）
+- `proof-map-*.json` - 用户地址索引（方便 API 查询）
+
+### 运行演示脚本
+
+```bash
 # 创建大群演示
 npm run script:create-community
 
