@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it, beforeEach } from "node:test";
 import { network } from "hardhat";
-import { parseEther, encodePacked, type Address } from "viem";
+import { parseEther, type Address } from "viem";
 import { MerkleTree, computeLeaf, type MerkleLeaf } from "../scripts/utils/merkleTree.js";
 
 describe("Room", async function () {
@@ -317,7 +317,7 @@ describe("Room", async function () {
     });
 
     it("应该能发送明文消息", async function () {
-      const content = encodePacked(["string"], ["Hello, World!"]);
+      const content = "Hello, World!";
       const cid = "QmTest123";
 
       const tx = await room.write.sendMessage(
@@ -353,7 +353,7 @@ describe("Room", async function () {
     });
 
     it("应该能发送密文消息", async function () {
-      const encryptedContent = encodePacked(["string"], ["encrypted_data_here"]);
+      const encryptedContent = "encrypted_data_here";
       const cid = "QmEncrypted456";
 
       const tx = await room.write.sendMessage(
@@ -367,7 +367,7 @@ describe("Room", async function () {
     });
 
     it("非成员不能发送消息", async function () {
-      const content = encodePacked(["string"], ["Hello"]);
+      const content = "Hello";
 
       await assert.rejects(
         async () => {
@@ -381,7 +381,7 @@ describe("Room", async function () {
     });
 
     it("应该拒绝超长消息", async function () {
-      const longContent = encodePacked(["string"], ["x".repeat(2000)]);
+      const longContent = "x".repeat(2000);
 
       await assert.rejects(
         async () => {
@@ -397,7 +397,7 @@ describe("Room", async function () {
     it("关闭明文后不能发送明文消息", async function () {
       await room.write.setPlaintextEnabled([false], { account: user1.account });
 
-      const content = encodePacked(["string"], ["Hello"]);
+      const content = "Hello";
 
       await assert.rejects(
         async () => {
@@ -413,7 +413,7 @@ describe("Room", async function () {
     it("应该能读取多条消息", async function () {
       // 发送 3 条消息
       for (let i = 0; i < 3; i++) {
-        const content = encodePacked(["string"], [`Message ${i}`]);
+        const content = `Message ${i}`;
         await room.write.sendMessage(
           [0, content, `cid${i}`],
           { account: user1.account }
@@ -426,7 +426,89 @@ describe("Room", async function () {
       // 读取所有消息
       for (let i = 0; i < 3; i++) {
         const message = await room.read.getMessage([BigInt(i)]);
-        assert.equal(message[4], `cid${i}`);
+        assert.equal(message[3], `Message ${i}`); // content
+        assert.equal(message[4], `cid${i}`); // cid
+      }
+    });
+
+    it("应该能分页读取消息", async function () {
+      // 发送 10 条消息
+      for (let i = 0; i < 10; i++) {
+        const content = `Message ${i}`;
+        await room.write.sendMessage(
+          [0, content, `cid${i}`],
+          { account: user1.account }
+        );
+      }
+
+      // 读取前 3 条 [0, 3)
+      const page1 = await room.read.getMessages([0n, 3n]);
+      assert.equal(page1.length, 3);
+      assert.equal(page1[0].content, "Message 0");
+      assert.equal(page1[1].content, "Message 1");
+      assert.equal(page1[2].content, "Message 2");
+
+      // 读取第二页 [3, 6)
+      const page2 = await room.read.getMessages([3n, 3n]);
+      assert.equal(page2.length, 3);
+      assert.equal(page2[0].content, "Message 3");
+      assert.equal(page2[1].content, "Message 4");
+      assert.equal(page2[2].content, "Message 5");
+
+      // 读取最后几条 [7, 10)
+      const page3 = await room.read.getMessages([7n, 3n]);
+      assert.equal(page3.length, 3);
+      assert.equal(page3[0].content, "Message 7");
+      assert.equal(page3[2].content, "Message 9");
+    });
+
+    it("分页读取超出范围时应该返回部分结果", async function () {
+      // 发送 5 条消息
+      for (let i = 0; i < 5; i++) {
+        await room.write.sendMessage(
+          [0, `Message ${i}`, ""],
+          { account: user1.account }
+        );
+      }
+
+      // 请求从索引 3 开始读取 10 条（实际只有 2 条）
+      const messages = await room.read.getMessages([3n, 10n]);
+      assert.equal(messages.length, 2);
+      assert.equal(messages[0].content, "Message 3");
+      assert.equal(messages[1].content, "Message 4");
+    });
+
+    it("分页读取起始位置超出范围应该返回空数组", async function () {
+      // 发送 3 条消息
+      for (let i = 0; i < 3; i++) {
+        await room.write.sendMessage(
+          [0, `Message ${i}`, ""],
+          { account: user1.account }
+        );
+      }
+
+      // 请求从索引 10 开始（超出范围）
+      const messages = await room.read.getMessages([10n, 5n]);
+      assert.equal(messages.length, 0);
+    });
+
+    it("应该能一次性读取所有消息", async function () {
+      // 发送 7 条消息
+      for (let i = 0; i < 7; i++) {
+        await room.write.sendMessage(
+          [0, `Message ${i}`, ""],
+          { account: user1.account }
+        );
+      }
+
+      // 一次性读取全部
+      const allMessages = await room.read.getMessages([0n, 100n]);
+      assert.equal(allMessages.length, 7);
+      
+      // 验证消息内容和顺序
+      for (let i = 0; i < 7; i++) {
+        assert.equal(allMessages[i].content, `Message ${i}`);
+        assert.equal(allMessages[i].sender.toLowerCase(), user1.account.address.toLowerCase());
       }
     });
   });

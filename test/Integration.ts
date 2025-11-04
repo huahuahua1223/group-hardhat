@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { network } from "hardhat";
-import { parseEther, encodePacked, type Address } from "viem";
+import { parseEther, type Address } from "viem";
 import { MerkleTree, computeLeaf, type MerkleLeaf } from "../scripts/utils/merkleTree.js";
 
 describe("集成测试：完整群聊流程", async function () {
@@ -192,9 +192,8 @@ describe("集成测试：完整群聊流程", async function () {
     ];
 
     for (const msg of messages) {
-      const content = encodePacked(["string"], [msg.text]);
       const tx = await room.write.sendMessage(
-        [0, content, ""],
+        [0, msg.text, ""],
         { account: msg.sender.account }
       );
       await publicClient.waitForTransactionReceipt({ hash: tx });
@@ -207,12 +206,25 @@ describe("集成测试：完整群聊流程", async function () {
     // ========== 第九步：读取消息历史 ==========
     console.log("\n📖 第九步：读取消息历史...");
     
+    // 单条读取
     for (let i = 0; i < 3; i++) {
       const message = await room.read.getMessage([BigInt(i)]);
       const sender = message[0];
       const content = message[3];
-      console.log(`   📝 消息 ${i + 1}: ${sender.slice(0, 6)}... 发送`);
+      console.log(`   📝 消息 ${i + 1}: ${sender.slice(0, 6)}... 发送: "${content}"`);
     }
+
+    // 分页读取测试
+    console.log("\n📄 测试分页读取消息...");
+    const allMessages = await room.read.getMessages([0n, 10n]);
+    assert.equal(allMessages.length, 3);
+    console.log(`   ✅ 分页读取成功，获取到 ${allMessages.length} 条消息`);
+    
+    // 验证消息内容
+    assert.equal(allMessages[0].content, "大家好！欢迎来到我的小群！");
+    assert.equal(allMessages[1].content, "谢谢邀请！");
+    assert.equal(allMessages[2].content, "很高兴加入！");
+    console.log(`   ✅ 消息内容验证通过`);
 
     // ========== 第十步：Bob 离开小群 ==========
     console.log("\n🚪 第十步：Bob 离开小群...");
@@ -234,7 +246,7 @@ describe("集成测试：完整群聊流程", async function () {
     // ========== 第十一步：发送密文消息 ==========
     console.log("\n🔐 第十一步：发送密文消息...");
     
-    const encryptedContent = encodePacked(["string"], ["encrypted_message_data"]);
+    const encryptedContent = "encrypted_message_data";
     const tx = await room.write.sendMessage(
       [1, encryptedContent, "QmEncrypted123"],
       { account: alice.account }
@@ -272,11 +284,11 @@ describe("集成测试：完整群聊流程", async function () {
     console.log("   ✅ 用户加入大群");
     console.log("   ✅ 小群创建与费用支付");
     console.log("   ✅ 成员邀请");
-    console.log("   ✅ 明文消息发送");
-    console.log("   ✅ 密文消息发送");
+    console.log("   ✅ 明文消息发送（字符串格式）");
+    console.log("   ✅ 密文消息发送（字符串格式）");
+    console.log("   ✅ 消息历史读取（单条 + 分页）");
     console.log("   ✅ 成员离开");
-    console.log("   ✅ 群密钥轮换");
-    console.log("   ✅ 消息历史读取\n");
+    console.log("   ✅ 群密钥轮换\n");
   });
 });
 

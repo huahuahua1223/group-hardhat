@@ -95,7 +95,7 @@ contract Room {
         address sender;    // 发送者地址
         uint40 ts;         // 时间戳
         uint8 kind;        // 消息类型：0 明文, 1 密文
-        bytes content;     // 消息内容（小于等于 messageMaxBytes）
+        string content;    // 消息内容（字符串形式，小于等于 messageMaxBytes）
         string cid;        // 可选（IPFS CID 或外部引用）
     }
     
@@ -289,7 +289,7 @@ contract Room {
      */
     function sendMessage(
         uint8 kind,
-        bytes calldata content,
+        string calldata content,
         string calldata cid
     ) external onlyMember {
         // 如果是明文消息，检查是否允许
@@ -297,11 +297,11 @@ contract Room {
             require(plaintextEnabled, "PlaintextOff");
         }
         // 检查消息长度
-        require(content.length <= messageMaxBytes, "TooLarge");
+        require(bytes(content).length <= messageMaxBytes, "TooLarge");
 
         seq += 1;
         uint40 ts = uint40(block.timestamp);
-        bytes32 contentHash = keccak256(content);
+        bytes32 contentHash = keccak256(bytes(content));
 
         // 触发消息广播事件（链下索引使用）
         emit MessageBroadcasted(address(this), msg.sender, kind, seq, contentHash, cid, ts);
@@ -329,9 +329,38 @@ contract Room {
      * @dev 从状态存储中读取消息
      */
     function getMessage(uint256 index) external view returns (
-        address sender, uint40 ts, uint8 kind, bytes memory content, string memory cid
+        address sender, uint40 ts, uint8 kind, string memory content, string memory cid
     ) {
         Message storage m = _messages[index];
         return (m.sender, m.ts, m.kind, m.content, m.cid);
+    }
+
+    /**
+     * @notice 分页读取消息历史
+     * @dev 返回区间 [start, start+count) 的消息
+     *      如果 start+count 超出范围，只返回到最后一条消息
+     */
+    function getMessages(uint256 start, uint256 count) external view returns (Message[] memory) {
+        uint256 totalMessages = _messages.length;
+        
+        // 如果起始位置超出范围，返回空数组
+        if (start >= totalMessages) {
+            return new Message[](0);
+        }
+        
+        // 计算实际返回的消息数量
+        uint256 end = start + count;
+        if (end > totalMessages) {
+            end = totalMessages;
+        }
+        uint256 actualCount = end - start;
+        
+        // 创建返回数组并填充数据
+        Message[] memory result = new Message[](actualCount);
+        for (uint256 i = 0; i < actualCount; i++) {
+            result[i] = _messages[start + i];
+        }
+        
+        return result;
     }
 }

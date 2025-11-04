@@ -30,9 +30,10 @@
   - 群密钥轮换（成员变更时自动）
 
 - ✅ **消息系统**
-  - 明文/密文消息支持
+  - 明文/密文消息支持（字符串格式）
   - 事件 + 状态双重存储
   - 可配置消息大小限制
+  - 分页读取消息历史
 
 - ✅ **费用系统**
   - 创建小群需支付固定费用（默认 50 UNICHAT）
@@ -181,7 +182,9 @@ npm run script:create-room
 - `inviteWithPermit(...)` - 使用 Permit 邀请（一键授权）
 - `kick(address user)` - 踢出成员（群主）
 - `leave()` - 主动离开（成员）
-- `sendMessage(uint8 kind, bytes content, string cid)` - 发送消息
+- `sendMessage(uint8 kind, string content, string cid)` - 发送消息（字符串格式）
+- `getMessage(uint256 index)` - 获取指定索引的消息
+- `getMessages(uint256 start, uint256 count)` - 分页读取消息（区间 [start, start+count)）
 - `rotateEpoch(bytes32 metadataHash)` - 手动轮换群密钥（群主）
 
 ### 4. MockUNICHAT.sol
@@ -236,9 +239,9 @@ const isValid = tree.verify(leafHash, proof, root);
 |------|---------|------|
 | CommunityFactory | 7 | ✅ 通过 |
 | Community | 10 | ✅ 通过 |
-| Room | 17 | ✅ 通过 |
+| Room | 21 | ✅ 通过 |
 | 集成测试 | 1 | ✅ 通过 |
-| **总计** | **35** | ✅ **全部通过** |
+| **总计** | **39** | ✅ **全部通过** |
 
 ### 测试场景
 
@@ -247,7 +250,8 @@ const isValid = tree.verify(leafHash, proof, root);
 - ✅ Merkle Proof 验证（有效/无效）
 - ✅ 用户加入和成员管理
 - ✅ 费用支付和代币转账
-- ✅ 消息发送（明文/密文）
+- ✅ 消息发送（明文/密文，字符串格式）
+- ✅ 消息分页读取和边界情况
 - ✅ 群密钥轮换
 - ✅ 完整的端到端流程
 
