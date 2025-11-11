@@ -265,6 +265,100 @@ describe("Community", async function () {
         /BadProof/
       );
     });
+
+    it("不同用户可以使用相同的 nonce", async function () {
+      // 使用相同的 nonce 为两个用户创建白名单
+      const sameNonce = `0x${'0'.repeat(63)}1` as `0x${string}`;
+      const validUntil = BigInt(Math.floor(Date.now() / 1000) + 86400 * 30);
+      
+      // 获取当前 epoch，新的 epoch 将是 currentEpoch + 1
+      const currentEpoch = await community.read.currentEpoch();
+      const nextEpoch = currentEpoch + 1n;
+      
+      // 创建新白名单，两个用户使用相同的 nonce 和正确的 epoch
+      const newWhitelist: MerkleLeaf[] = [
+        {
+          community: community.address,
+          epoch: nextEpoch,
+          account: user1.account.address,
+          maxTier: 3n,
+          validUntil,
+          nonce: sameNonce,
+        },
+        {
+          community: community.address,
+          epoch: nextEpoch,
+          account: user2.account.address,
+          maxTier: 2n,
+          validUntil,
+          nonce: sameNonce,
+        },
+      ];
+      
+      // 使用正确的 epoch 生成 tree 和 root
+      const leaves = newWhitelist.map(computeLeaf);
+      const newTree = new MerkleTree(leaves);
+      const newRoot = newTree.getRoot();
+      
+      // 更新 Merkle Root
+      await community.write.setMerkleRoot(
+        [newRoot, "ipfs://same-nonce-test"],
+        { account: communityOwner.account }
+      );
+
+      // user1 使用 nonce 加入
+      const user1Leaf = newWhitelist[0];
+      const user1Proof = newTree.getProof(computeLeaf(user1Leaf));
+      await community.write.joinCommunity(
+        [user1Leaf.maxTier, user1Leaf.epoch, user1Leaf.validUntil, user1Leaf.nonce, user1Proof],
+        { account: user1.account }
+      );
+
+      // 验证 user1 的 nonce 已被使用
+      const user1NonceUsed = await community.read.usedNonces([user1.account.address, sameNonce]);
+      assert.equal(user1NonceUsed, true);
+
+      // user2 使用相同的 nonce 加入（应该成功，因为是不同用户）
+      const user2Leaf = newWhitelist[1];
+      const user2Proof = newTree.getProof(computeLeaf(user2Leaf));
+      await community.write.joinCommunity(
+        [user2Leaf.maxTier, user2Leaf.epoch, user2Leaf.validUntil, user2Leaf.nonce, user2Proof],
+        { account: user2.account }
+      );
+
+      // 验证 user2 的 nonce 也被标记为已使用
+      const user2NonceUsed = await community.read.usedNonces([user2.account.address, sameNonce]);
+      assert.equal(user2NonceUsed, true);
+
+      // 验证两个用户都成功加入
+      const user1IsMember = await community.read.isActiveMember([user1.account.address]);
+      const user2IsMember = await community.read.isActiveMember([user2.account.address]);
+      assert.equal(user1IsMember, true);
+      assert.equal(user2IsMember, true);
+    });
+
+    it("同一用户不能重复使用相同的 nonce", async function () {
+      const leaf = whitelist[0];
+      const leafHash = computeLeaf(leaf);
+      const proof = tree.getProof(leafHash);
+
+      // 第一次加入成功
+      await community.write.joinCommunity(
+        [leaf.maxTier, leaf.epoch, leaf.validUntil, leaf.nonce, proof],
+        { account: user1.account }
+      );
+
+      // 尝试用相同的 nonce 再次加入（应该失败）
+      await assert.rejects(
+        async () => {
+          await community.write.joinCommunity(
+            [leaf.maxTier, leaf.epoch, leaf.validUntil, leaf.nonce, proof],
+            { account: user1.account }
+          );
+        },
+        /NonceUsed/
+      );
+    });
   });
 
   describe("创建小群", () => {

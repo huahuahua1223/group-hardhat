@@ -85,8 +85,8 @@ contract Community is Ownable, Pausable {
     /// @notice 是否已初始化（防止重复初始化）
     bool private _initialized;
     
-    /// @notice 已使用的 nonce，防止重放攻击
-    mapping(bytes32 => bool) public usedNonces;
+    /// @notice 已使用的 nonce，防止重放攻击（按用户划分作用域）
+    mapping(address => mapping(bytes32 => bool)) public usedNonces;
     
     /// @notice 小群默认邀请费（大群群主设置）
     uint256 public defaultInviteFee;
@@ -200,9 +200,9 @@ contract Community is Ownable, Pausable {
         bytes32 leaf = computeLeaf(address(this), epoch, msg.sender, maxTier, validUntil, nonce);
         require(proof.verify(merkleRoots[epoch], leaf), "BadProof");
         
-        // 防止 nonce 重放攻击
-        require(!usedNonces[nonce], "NonceUsed");
-        usedNonces[nonce] = true;
+        // 防止 nonce 重放攻击（按用户作用域）
+        require(!usedNonces[msg.sender][nonce], "NonceUsed");
+        usedNonces[msg.sender][nonce] = true;
 
         isMember[msg.sender] = true;
         memberTier[msg.sender] = maxTier;
