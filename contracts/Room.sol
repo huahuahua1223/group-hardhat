@@ -4,6 +4,7 @@ pragma solidity ^0.8.24;
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IERC20Permit} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Permit.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import {Pausable} from "@openzeppelin/contracts/utils/Pausable.sol";
 
 /**
  * @notice Community 只读接口，用于验证成员资格
@@ -18,7 +19,7 @@ interface ICommunityReadonly {
  * @dev 群主可自定义邀请费；任何群成员可发送消息
  *      消息同时存储在事件和状态中，支持明文和密文
  */
-contract Room {
+contract Room is Pausable {
     using SafeERC20 for IERC20;
 
     /* ===================== 事件 ===================== */
@@ -42,6 +43,9 @@ contract Room {
 
     /// @notice 当群密钥 epoch 增加时触发（成员变更时）
     event GroupKeyEpochIncreased(uint64 epoch, bytes32 metadataHash);
+    
+    /// @notice 当转让小群群主时触发
+    event RoomOwnershipTransferred(address indexed previousOwner, address indexed newOwner);
 
     /// @notice 当广播消息时触发
     event MessageBroadcasted(
@@ -200,7 +204,7 @@ contract Room {
      *      邀请人需要支付邀请费（如果设置了费用）
      *      成员变更会自动增加群密钥 epoch
      */
-    function invite(address user) external {
+    function invite(address user) external whenNotPaused {
         require(user != address(0), "ZeroAddr");
         require(!isMember[user], "AlreadyMember");
         require(COMMUNITY.isActiveMember(user), "NotCommunityMember");
@@ -230,7 +234,7 @@ contract Room {
         uint256 value,
         uint256 deadline,
         uint8 v, bytes32 r, bytes32 s
-    ) external {
+    ) external whenNotPaused {
         require(user != address(0), "ZeroAddr");
         require(!isMember[user], "AlreadyMember");
         require(COMMUNITY.isActiveMember(user), "NotCommunityMember");
@@ -255,8 +259,10 @@ contract Room {
      * @notice 踢出成员
      * @dev 只有群主可以调用
      *      成员变更会自动增加群密钥 epoch
+     *      群主不能踢出自己
      */
-    function kick(address user) external onlyOwner {
+    function kick(address user) external onlyOwner whenNotPaused {
+        require(user != owner, "CannotKickOwner");
         require(isMember[user], "NotMember");
         isMember[user] = false;
         membersCount -= 1;
@@ -270,7 +276,7 @@ contract Room {
      * @dev 任何成员都可以调用
      *      成员变更会自动增加群密钥 epoch
      */
-    function leave() external onlyMember {
+    function leave() external onlyMember whenNotPaused {
         isMember[msg.sender] = false;
         membersCount -= 1;
         groupKeyEpoch += 1;
@@ -291,7 +297,7 @@ contract Room {
         uint8 kind,
         string calldata content,
         string calldata cid
-    ) external onlyMember {
+    ) external onlyMember whenNotPaused {
         // 如果是明文消息，检查是否允许
         if (kind == 0) {
             require(plaintextEnabled, "PlaintextOff");
@@ -362,5 +368,36 @@ contract Room {
         }
         
         return result;
+    }
+
+    /* ===================== 管理员函数 ===================== */
+    /**
+     * @notice 暂停合约
+     * @dev 只有群主可以调用，暂停后禁止邀请、发消息等操作
+     */
+    function pause() external onlyOwner {
+        _pause();
+    }
+
+    /**
+     * @notice 恢复合约
+     * @dev 只有群主可以调用
+     */
+    function unpause() external onlyOwner {
+        _unpause();
+    }
+
+    /**
+     * @notice 转让小群群主
+     * @dev 只有当前群主可以调用，新群主不能为零地址
+     *      新群主必须是小群成员
+     * @param newOwner 新群主地址
+     */
+    function transferRoomOwnership(address newOwner) external onlyOwner {
+        require(newOwner != address(0), "ZeroAddr");
+        require(isMember[newOwner], "NotMember");
+        address oldOwner = owner;
+        owner = newOwner;
+        emit RoomOwnershipTransferred(oldOwner, newOwner);
     }
 }

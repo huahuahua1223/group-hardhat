@@ -2,8 +2,10 @@
 pragma solidity ^0.8.24;
 
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
+import {Pausable} from "@openzeppelin/contracts/utils/Pausable.sol";
 import {Clones} from "@openzeppelin/contracts/proxy/Clones.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {MerkleProof} from "@openzeppelin/contracts/utils/cryptography/MerkleProof.sol";
 
 /**
@@ -26,8 +28,9 @@ interface IRoom {
  * @dev 仅存储 Merkle Root + Epoch，成员需提交 MerkleProof 上链绑定后才可创建/参与小群
  *      使用 EIP-1167 最小代理模式克隆 Room 实例
  */
-contract Community is Ownable {
+contract Community is Ownable, Pausable {
     using MerkleProof for bytes32[];
+    using SafeERC20 for IERC20;
 
     /* ===================== 事件 ===================== */
     /// @notice 当更新 Merkle Root 时触发
@@ -38,6 +41,9 @@ contract Community is Ownable {
     
     /// @notice 当创建新的小群时触发
     event RoomCreated(address indexed room, address indexed owner, uint256 inviteFee);
+    
+    /// @notice 当转让大群群主时触发
+    event CommunityOwnershipTransferred(address indexed previousOwner, address indexed newOwner);
 
     /* ===================== 状态变量 ===================== */
     /// @notice 费用代币合约地址
@@ -75,6 +81,9 @@ contract Community is Ownable {
 
     /// @notice 是否已初始化（防止重复初始化）
     bool private _initialized;
+    
+    /// @notice 已使用的 nonce，防止重放攻击
+    mapping(bytes32 => bool) public usedNonces;
 
     /* ===================== 构造函数 ===================== */
     /**
@@ -126,7 +135,7 @@ contract Community is Ownable {
      * @dev 只有群主可以调用，每次设置会自动增加 epoch 版本号
      *      用于更新白名单，所有成员需要用新的 proof 重新加入
      */
-    function setMerkleRoot(bytes32 newRoot, string calldata uri) external onlyOwner {
+    function setMerkleRoot(bytes32 newRoot, string calldata uri) external onlyOwner whenNotPaused {
         require(newRoot != bytes32(0), "ZeroRoot");
         currentEpoch += 1;
         merkleRoots[currentEpoch] = newRoot;
@@ -165,12 +174,16 @@ contract Community is Ownable {
         uint256 validUntil,
         bytes32 nonce,
         bytes32[] calldata proof
-    ) external {
+    ) external whenNotPaused {
         require(epoch == currentEpoch, "EpochMismatch");
         if (validUntil != 0) require(block.timestamp <= validUntil, "ProofExpired");
 
         bytes32 leaf = computeLeaf(address(this), epoch, msg.sender, maxTier, validUntil, nonce);
         require(proof.verify(merkleRoots[epoch], leaf), "BadProof");
+        
+        // 防止 nonce 重放攻击
+        require(!usedNonces[nonce], "NonceUsed");
+        usedNonces[nonce] = true;
 
         isMember[msg.sender] = true;
         memberTier[msg.sender] = maxTier;
@@ -219,9 +232,9 @@ contract Community is Ownable {
      *      需要支付固定创建费（默认 50 UNICHAT）
      *      使用 EIP-1167 克隆模式创建 Room 实例
      */
-    function createRoom(RoomInit calldata params) external onlyActiveMember returns (address room) {
-        // 从创建者扣除创建费并转入金库
-        require(UNICHAT.transferFrom(msg.sender, treasury, roomCreateFee), "UNICHAT_TRANSFER_FAIL");
+    function createRoom(RoomInit calldata params) external onlyActiveMember whenNotPaused returns (address room) {
+        // 从创建者扣除创建费并转入金库（使用 SafeERC20）
+        UNICHAT.safeTransferFrom(msg.sender, treasury, roomCreateFee);
 
         // 克隆 Room 实现合约
         room = Clones.clone(roomImplementation);
@@ -244,4 +257,63 @@ contract Community is Ownable {
      * @notice 获取已创建的小群数量
      */
     function roomsCount() external view returns (uint256) { return rooms.length; }
+    
+    /**
+     * @notice 批量获取小群地址列表
+     * @dev 分页查询，返回区间 [start, start+count) 的小群地址
+     * @param start 起始索引
+     * @param count 查询数量
+     */
+    function getRooms(uint256 start, uint256 count) external view returns (address[] memory) {
+        uint256 totalRooms = rooms.length;
+        
+        // 如果起始位置超出范围，返回空数组
+        if (start >= totalRooms) {
+            return new address[](0);
+        }
+        
+        // 计算实际返回的数量
+        uint256 end = start + count;
+        if (end > totalRooms) {
+            end = totalRooms;
+        }
+        uint256 actualCount = end - start;
+        
+        // 创建返回数组并填充数据
+        address[] memory result = new address[](actualCount);
+        for (uint256 i = 0; i < actualCount; i++) {
+            result[i] = rooms[start + i];
+        }
+        
+        return result;
+    }
+
+    /* ===================== 管理员函数 ===================== */
+    /**
+     * @notice 暂停合约
+     * @dev 只有群主可以调用，暂停后禁止加入、创建小群等操作
+     */
+    function pause() external onlyOwner {
+        _pause();
+    }
+
+    /**
+     * @notice 恢复合约
+     * @dev 只有群主可以调用
+     */
+    function unpause() external onlyOwner {
+        _unpause();
+    }
+
+    /**
+     * @notice 转让大群群主
+     * @dev 只有当前群主可以调用，新群主不能为零地址
+     * @param newOwner 新群主地址
+     */
+    function transferCommunityOwnership(address newOwner) external onlyOwner {
+        require(newOwner != address(0), "ZeroAddr");
+        address oldOwner = owner();
+        _transferOwnership(newOwner);
+        emit CommunityOwnershipTransferred(oldOwner, newOwner);
+    }
 }

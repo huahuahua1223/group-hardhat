@@ -2,6 +2,7 @@
 pragma solidity ^0.8.24;
 
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
+import {Pausable} from "@openzeppelin/contracts/utils/Pausable.sol";
 import {Clones} from "@openzeppelin/contracts/proxy/Clones.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
@@ -23,7 +24,7 @@ interface ICommunity {
  * @notice 系统管理员用于创建大群（Community）实例，配置全局参数
  * @dev 使用 EIP-1167 最小代理模式克隆 Community 实例，节省部署 gas
  */
-contract CommunityFactory is Ownable {
+contract CommunityFactory is Ownable, Pausable {
     /* ===================== 事件 ===================== */
     /// @notice 当创建新的大群时触发
     event CommunityCreated(address indexed community, address indexed owner);
@@ -113,7 +114,7 @@ contract CommunityFactory is Ownable {
      * @dev 仅系统管理员可创建大群，并指定大群群主
      *      使用 EIP-1167 克隆模式创建 Community 实例
      */
-    function createCommunity(address communityOwner) external onlyOwner returns (address community) {
+    function createCommunity(address communityOwner) external onlyOwner whenNotPaused returns (address community) {
         require(communityImplementation != address(0) && roomImplementation != address(0), "ImplNotSet");
         
         // 使用最小代理模式克隆 Community 合约
@@ -129,5 +130,21 @@ contract CommunityFactory is Ownable {
         );
         
         emit CommunityCreated(community, communityOwner);
+    }
+
+    /**
+     * @notice 暂停工厂合约
+     * @dev 只有系统管理员可以调用，暂停后禁止创建新的大群
+     */
+    function pause() external onlyOwner {
+        _pause();
+    }
+
+    /**
+     * @notice 恢复工厂合约
+     * @dev 只有系统管理员可以调用
+     */
+    function unpause() external onlyOwner {
+        _unpause();
     }
 }
