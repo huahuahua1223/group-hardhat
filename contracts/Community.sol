@@ -103,7 +103,10 @@ contract Community is Ownable, Pausable {
      * @dev 满足 OpenZeppelin v5 要求：实现合约部署时把 owner 设为部署者
      *      克隆实例会在 initialize() 中重新设置 owner
      */
-    constructor() Ownable(msg.sender) {}
+    constructor() Ownable(msg.sender) {
+        // 锁死实现合约，防止被人对“实现合约本体”调用 initialize
+        _initialized = true;
+    }
 
     /* ===================== 修饰器 ===================== */
     /**

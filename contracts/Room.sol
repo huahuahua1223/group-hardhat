@@ -116,6 +116,17 @@ contract Room is Pausable {
     /// @notice 只有成员可以调用
     modifier onlyMember() { require(isMember[msg.sender], "NotMember"); _; }
 
+    /* ===================== 构造函数 ===================== */
+    /**
+     * @notice 构造函数，锁死实现合约
+     * @dev 防止有人对实现合约本体调用 initialize
+     *      只有通过克隆创建的实例才能正常初始化
+     */
+    constructor() {
+        // 锁死实现合约，防止被人对"实现合约本体"调用 initialize
+        _initialized = true;
+    }
+
     /* ===================== 初始化函数（用于克隆实例） ===================== */
     /**
      * @notice 初始化克隆的 Room 实例
