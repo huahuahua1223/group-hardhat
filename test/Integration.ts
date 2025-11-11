@@ -56,7 +56,11 @@ describe("集成测试：完整群聊流程", async function () {
     
     const epoch = 1n;
     const validUntil = BigInt(Math.floor(Date.now() / 1000) + 86400 * 30);
-    const nonce = "0x0000000000000000000000000000000000000000000000000000000000000001" as `0x${string}`;
+    
+    // 为每个用户生成唯一的 nonce
+    const nonce1 = `0x${Date.now().toString(16).padStart(64, '0')}` as `0x${string}`;
+    const nonce2 = `0x${(Date.now() + 1).toString(16).padStart(64, '0')}` as `0x${string}`;
+    const nonce3 = `0x${(Date.now() + 2).toString(16).padStart(64, '0')}` as `0x${string}`;
 
     const whitelist: MerkleLeaf[] = [
       {
@@ -65,7 +69,7 @@ describe("集成测试：完整群聊流程", async function () {
         account: alice.account.address,
         maxTier: 3n,
         validUntil,
-        nonce,
+        nonce: nonce1,
       },
       {
         community: communityAddress,
@@ -73,7 +77,7 @@ describe("集成测试：完整群聊流程", async function () {
         account: bob.account.address,
         maxTier: 2n,
         validUntil,
-        nonce,
+        nonce: nonce2,
       },
       {
         community: communityAddress,
@@ -81,7 +85,7 @@ describe("集成测试：完整群聊流程", async function () {
         account: charlie.account.address,
         maxTier: 1n,
         validUntil,
-        nonce,
+        nonce: nonce3,
       },
     ];
 
@@ -136,10 +140,7 @@ describe("集成测试：完整群聊流程", async function () {
 
     const treasuryBalanceBefore = await unichat.read.balanceOf([treasury.account.address]);
 
-    const createRoomTx = await community.write.createRoom(
-      [{ inviteFee: parseEther("5"), plaintextEnabled: true, messageMaxBytes: 2048 }],
-      { account: alice.account }
-    );
+    const createRoomTx = await community.write.createRoom({ account: alice.account });
     const roomReceipt = await publicClient.waitForTransactionReceipt({ hash: createRoomTx });
     const roomLogs = await publicClient.getContractEvents({
       address: community.address,
@@ -152,38 +153,156 @@ describe("集成测试：完整群聊流程", async function () {
     const roomAddress = roomLogs[0].args.room as Address;
     const room = await viem.getContractAt("Room", roomAddress);
     console.log(`   ✅ Room: ${roomAddress}`);
-    console.log(`   ✅ 邀请费: 5 UNICHAT`);
+    console.log(`   ✅ 邀请费: 0 UNICHAT (使用大群默认值)`);
 
     // 验证创建费已支付
     const treasuryBalanceAfter = await unichat.read.balanceOf([treasury.account.address]);
     assert.equal(treasuryBalanceAfter - treasuryBalanceBefore, parseEther("50"));
     console.log(`   ✅ 创建费 50 UNICHAT 已支付给金库`);
 
-    // ========== 第七步：Alice 邀请 Bob 和 Charlie ==========
-    console.log("\n📨 第七步：Alice 邀请成员...");
+    // ========== 第七步：Alice 在第一个小群邀请 Bob（邀请费为 0）==========
+    console.log("\n📨 第七步：Alice 在第一个小群邀请 Bob（邀请费为 0）...");
     
-    // 邀请 Bob
-    await unichat.write.approve(
-      [room.address, parseEther("5")],
-      { account: alice.account }
-    );
+    // 验证第一个小群的邀请费是 0
+    const firstRoomInviteFee = await room.read.inviteFee();
+    assert.equal(firstRoomInviteFee, 0n);
+    console.log(`   ✅ 第一个小群邀请费: ${firstRoomInviteFee} UNICHAT`);
+    
+    // 邀请 Bob（邀请费为 0，无需 approve）
     await room.write.invite([bob.account.address], { account: alice.account });
-    console.log(`   ✅ Bob 已被邀请`);
+    console.log(`   ✅ Bob 已被邀请到第一个小群`);
 
-    // 邀请 Charlie
+    const firstRoomMembersCount = await room.read.membersCount();
+    assert.equal(firstRoomMembersCount, 2n);
+    console.log(`   ✅ 第一个小群成员数: ${firstRoomMembersCount}`);
+
+    // ========== 第八步：大群群主设置默认邀请费为 10 UNICHAT ==========
+    console.log("\n⚙️  第八步：大群群主设置默认邀请费为 10 UNICHAT...");
+    
+    const newDefaultInviteFee = parseEther("10");
+    await community.write.setDefaultRoomParams(
+      [newDefaultInviteFee, true],
+      { account: communityOwner.account }
+    );
+    
+    // 验证默认邀请费已更新
+    const defaultInviteFee = await community.read.defaultInviteFee();
+    assert.equal(defaultInviteFee, newDefaultInviteFee);
+    console.log(`   ✅ 默认邀请费已更新为: ${newDefaultInviteFee / BigInt(1e18)} UNICHAT`);
+
+    // ========== 第九步：Bob 创建第二个小群（使用新的默认邀请费 10）==========
+    console.log("\n🏠 第九步：Bob 创建第二个小群（使用新的默认邀请费）...");
+    
     await unichat.write.approve(
-      [room.address, parseEther("5")],
+      [community.address, parseEther("50")],
+      { account: bob.account }
+    );
+
+    const createRoom2Tx = await community.write.createRoom({ account: bob.account });
+    const room2Receipt = await publicClient.waitForTransactionReceipt({ hash: createRoom2Tx });
+    const room2Logs = await publicClient.getContractEvents({
+      address: community.address,
+      abi: community.abi,
+      eventName: "RoomCreated",
+      fromBlock: room2Receipt.blockNumber,
+      toBlock: room2Receipt.blockNumber,
+    });
+
+    const room2Address = room2Logs[0].args.room as Address;
+    const room2 = await viem.getContractAt("Room", room2Address);
+    console.log(`   ✅ 第二个 Room: ${room2Address}`);
+    
+    // 验证第二个小群的邀请费是新设置的 10 UNICHAT
+    const secondRoomInviteFee = await room2.read.inviteFee();
+    assert.equal(secondRoomInviteFee, newDefaultInviteFee);
+    console.log(`   ✅ 第二个小群邀请费: ${secondRoomInviteFee / BigInt(1e18)} UNICHAT (使用新的默认值)`);
+
+    // ========== 第十步：Bob 先邀请 Alice 进入第二个小群（Bob 自己付费给自己）==========
+    console.log("\n💰 第十步：Bob 先邀请 Alice 进入第二个小群...");
+    
+    // 验证第二个小群的 feeRecipient 是 Bob（创建者）
+    const room2FeeRecipient = await room2.read.feeRecipient();
+    assert.equal(room2FeeRecipient.toLowerCase(), bob.account.address.toLowerCase());
+    console.log(`   ✅ 第二个小群的费用接收人是 Bob（创建者）`);
+
+    // Bob 授权 10 UNICHAT 给第二个小群合约
+    await unichat.write.approve(
+      [room2.address, newDefaultInviteFee],
+      { account: bob.account }
+    );
+
+    // Bob 邀请 Alice 到第二个小群
+    await room2.write.invite([alice.account.address], { account: bob.account });
+    console.log(`   ✅ Alice 已被邀请到第二个小群（Bob 付费给自己）`);
+
+    const room2MembersCountAfterAlice = await room2.read.membersCount();
+    assert.equal(room2MembersCountAfterAlice, 2n);
+
+    // ========== 第十一步：Alice 在第二个小群邀请 Charlie（付费给 Bob）==========
+    console.log("\n💵 第十一步：Alice 在第二个小群邀请 Charlie（需要支付邀请费给 Bob）...");
+    
+    // 记录 Alice 和 Bob 的余额（邀请前）
+    const aliceBalanceBefore = await unichat.read.balanceOf([alice.account.address]);
+    const bobBalanceBefore = await unichat.read.balanceOf([bob.account.address]);
+    
+    // Alice 授权 10 UNICHAT 给第二个小群合约
+    await unichat.write.approve(
+      [room2.address, newDefaultInviteFee],
       { account: alice.account }
     );
+    console.log(`   ✅ Alice 已授权 ${newDefaultInviteFee / BigInt(1e18)} UNICHAT 给第二个小群`);
+
+    // Alice 邀请 Charlie 到第二个小群
+    const inviteTx = await room2.write.invite([charlie.account.address], { account: alice.account });
+    const inviteReceipt = await publicClient.waitForTransactionReceipt({ hash: inviteTx });
+    console.log(`   ✅ Charlie 已被邀请到第二个小群`);
+
+    // 验证邀请事件
+    const inviteLogs = await publicClient.getContractEvents({
+      address: room2.address,
+      abi: room2.abi,
+      eventName: "Invited",
+      fromBlock: inviteReceipt.blockNumber,
+      toBlock: inviteReceipt.blockNumber,
+    });
+    assert.equal(inviteLogs.length, 1);
+    assert.equal((inviteLogs[0].args as any).fee, newDefaultInviteFee);
+    console.log(`   ✅ Invited 事件已触发，邀请费: ${newDefaultInviteFee / BigInt(1e18)} UNICHAT`);
+
+    // 验证余额变化：Alice 减少 10 UNICHAT，Bob 增加 10 UNICHAT
+    const aliceBalanceAfter = await unichat.read.balanceOf([alice.account.address]);
+    const bobBalanceAfter = await unichat.read.balanceOf([bob.account.address]);
+    assert.equal(aliceBalanceBefore - aliceBalanceAfter, newDefaultInviteFee);
+    assert.equal(bobBalanceAfter - bobBalanceBefore, newDefaultInviteFee);
+    console.log(`   ✅ Alice 已支付 ${newDefaultInviteFee / BigInt(1e18)} UNICHAT 邀请费给 Bob`);
+    console.log(`   ✅ Bob 已收到 ${newDefaultInviteFee / BigInt(1e18)} UNICHAT 邀请费`);
+
+    // 验证 Charlie 是第二个小群的成员
+    const isCharlieInRoom2 = await room2.read.isMember([charlie.account.address]);
+    assert.equal(isCharlieInRoom2, true);
+    
+    const secondRoomMembersCount = await room2.read.membersCount();
+    assert.equal(secondRoomMembersCount, 3n);
+    console.log(`   ✅ 第二个小群成员数: ${secondRoomMembersCount}`);
+
+    // ========== 第十二步：Alice 在第一个小群继续邀请 Charlie（邀请费仍为 0）==========
+    console.log("\n📨 第十二步：Alice 在第一个小群继续邀请 Charlie（邀请费仍为 0）...");
+    
+    // 验证第一个小群的邀请费仍然是 0（不受默认参数修改影响）
+    const stillZeroInviteFee = await room.read.inviteFee();
+    assert.equal(stillZeroInviteFee, 0n);
+    console.log(`   ✅ 第一个小群邀请费仍为: ${stillZeroInviteFee} UNICHAT`);
+    
+    // Alice 邀请 Charlie 到第一个小群（无需 approve）
     await room.write.invite([charlie.account.address], { account: alice.account });
-    console.log(`   ✅ Charlie 已被邀请`);
+    console.log(`   ✅ Charlie 已被邀请到第一个小群`);
 
-    const membersCount = await room.read.membersCount();
-    assert.equal(membersCount, 3n);
-    console.log(`   ✅ 小群成员数: ${membersCount}`);
+    const finalFirstRoomMembersCount = await room.read.membersCount();
+    assert.equal(finalFirstRoomMembersCount, 3n);
+    console.log(`   ✅ 第一个小群最终成员数: ${finalFirstRoomMembersCount}`);
 
-    // ========== 第八步：成员发送消息 ==========
-    console.log("\n💬 第八步：成员发送消息...");
+    // ========== 第十三步：成员在第一个小群发送消息 ==========
+    console.log("\n💬 第十三步：成员在第一个小群发送消息...");
     
     const messages = [
       { sender: alice, text: "大家好！欢迎来到我的小群！" },
@@ -203,8 +322,8 @@ describe("集成测试：完整群聊流程", async function () {
     const messageCount = await room.read.messageCount();
     assert.equal(messageCount, 3n);
 
-    // ========== 第九步：读取消息历史 ==========
-    console.log("\n📖 第九步：读取消息历史...");
+    // ========== 第十四步：读取消息历史 ==========
+    console.log("\n📖 第十四步：读取消息历史...");
     
     // 单条读取
     for (let i = 0; i < 3; i++) {
@@ -226,25 +345,25 @@ describe("集成测试：完整群聊流程", async function () {
     assert.equal(allMessages[2].content, "很高兴加入！");
     console.log(`   ✅ 消息内容验证通过`);
 
-    // ========== 第十步：Bob 离开小群 ==========
-    console.log("\n🚪 第十步：Bob 离开小群...");
+    // ========== 第十五步：Bob 离开第一个小群 ==========
+    console.log("\n🚪 第十五步：Bob 离开第一个小群...");
     
     const epochBefore = await room.read.groupKeyEpoch();
     await room.write.leave({ account: bob.account });
     const epochAfter = await room.read.groupKeyEpoch();
 
-    const bobIsMember = await room.read.isMember([bob.account.address]);
-    const finalMembersCount = await room.read.membersCount();
+    const bobIsMemberRoom1 = await room.read.isMember([bob.account.address]);
+    const finalMembersCountRoom1 = await room.read.membersCount();
 
-    assert.equal(bobIsMember, false);
-    assert.equal(finalMembersCount, 2n);
+    assert.equal(bobIsMemberRoom1, false);
+    assert.equal(finalMembersCountRoom1, 2n);
     assert.equal(epochAfter, epochBefore + 1n);
-    console.log(`   ✅ Bob 已离开`);
+    console.log(`   ✅ Bob 已离开第一个小群`);
     console.log(`   ✅ 群密钥 epoch 已更新: ${epochBefore} → ${epochAfter}`);
-    console.log(`   ✅ 剩余成员: ${finalMembersCount}`);
+    console.log(`   ✅ 剩余成员: ${finalMembersCountRoom1}`);
 
-    // ========== 第十一步：发送密文消息 ==========
-    console.log("\n🔐 第十一步：发送密文消息...");
+    // ========== 第十六步：发送密文消息 ==========
+    console.log("\n🔐 第十六步：发送密文消息...");
     
     const encryptedContent = "encrypted_message_data";
     const tx = await room.write.sendMessage(
@@ -257,22 +376,31 @@ describe("集成测试：完整群聊流程", async function () {
     assert.equal(lastMessage[2], 1); // kind = encrypted
     console.log(`   ✅ Alice 发送了密文消息`);
 
-    // ========== 第十二步：验证最终状态 ==========
-    console.log("\n✅ 第十二步：验证最终状态...");
+    // ========== 第十七步：验证最终状态 ==========
+    console.log("\n✅ 第十七步：验证最终状态...");
     
     const finalMessageCount = await room.read.messageCount();
-    const aliceIsMember = await room.read.isMember([alice.account.address]);
-    const charlieIsMember = await room.read.isMember([charlie.account.address]);
+    const aliceIsMemberRoom1 = await room.read.isMember([alice.account.address]);
+    const aliceIsMemberRoom2 = await room2.read.isMember([alice.account.address]);
+    const charlieIsMemberRoom1 = await room.read.isMember([charlie.account.address]);
+    const bobIsMemberRoom2 = await room2.read.isMember([bob.account.address]);
+    const charlieIsMemberRoom2 = await room2.read.isMember([charlie.account.address]);
 
     assert.equal(finalMessageCount, 4n);
-    assert.equal(aliceIsMember, true);
-    assert.equal(charlieIsMember, true);
-    assert.equal(bobIsMember, false);
+    assert.equal(aliceIsMemberRoom1, true);
+    assert.equal(aliceIsMemberRoom2, true);
+    assert.equal(charlieIsMemberRoom1, true);
+    assert.equal(bobIsMemberRoom1, false);
+    assert.equal(bobIsMemberRoom2, true);
+    assert.equal(charlieIsMemberRoom2, true);
 
-    console.log(`   ✅ 总消息数: ${finalMessageCount}`);
-    console.log(`   ✅ Alice 在群中: ${aliceIsMember}`);
-    console.log(`   ✅ Charlie 在群中: ${charlieIsMember}`);
-    console.log(`   ✅ Bob 已离开: ${!bobIsMember}`);
+    console.log(`   ✅ 第一个小群总消息数: ${finalMessageCount}`);
+    console.log(`   ✅ 第一个小群 - Alice 在群中: ${aliceIsMemberRoom1}`);
+    console.log(`   ✅ 第一个小群 - Charlie 在群中: ${charlieIsMemberRoom1}`);
+    console.log(`   ✅ 第一个小群 - Bob 已离开: ${!bobIsMemberRoom1}`);
+    console.log(`   ✅ 第二个小群 - Alice 在群中: ${aliceIsMemberRoom2}`);
+    console.log(`   ✅ 第二个小群 - Bob 在群中: ${bobIsMemberRoom2}`);
+    console.log(`   ✅ 第二个小群 - Charlie 在群中: ${charlieIsMemberRoom2}`);
 
     console.log("\n" + "=".repeat(60));
     console.log("🎉 集成测试完成！所有功能正常运行！");
@@ -283,12 +411,17 @@ describe("集成测试：完整群聊流程", async function () {
     console.log("   ✅ Merkle Tree 验证");
     console.log("   ✅ 用户加入大群");
     console.log("   ✅ 小群创建与费用支付");
-    console.log("   ✅ 成员邀请");
+    console.log("   ✅ 成员邀请（免费邀请）");
+    console.log("   ✅ 大群群主修改默认邀请费");
+    console.log("   ✅ 修改默认参数后创建新小群（使用新参数）");
+    console.log("   ✅ 付费邀请（approve + 支付代币）");
+    console.log("   ✅ 已存在小群不受默认参数修改影响");
     console.log("   ✅ 明文消息发送（字符串格式）");
     console.log("   ✅ 密文消息发送（字符串格式）");
     console.log("   ✅ 消息历史读取（单条 + 分页）");
     console.log("   ✅ 成员离开");
-    console.log("   ✅ 群密钥轮换\n");
+    console.log("   ✅ 群密钥轮换");
+    console.log("   ✅ 多小群并存验证\n");
   });
 });
 

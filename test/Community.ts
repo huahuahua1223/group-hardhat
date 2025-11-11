@@ -121,7 +121,11 @@ describe("Community", async function () {
       // 设置 Merkle Tree
       const epoch = 1n;
       const validUntil = BigInt(Math.floor(Date.now() / 1000) + 86400 * 30);
-      const nonce = "0x0000000000000000000000000000000000000000000000000000000000000001" as `0x${string}`;
+      
+      // 为每个用户生成唯一的 nonce
+      const nonce1 = `0x${Date.now().toString(16).padStart(64, '0')}` as `0x${string}`;
+      const nonce2 = `0x${(Date.now() + 1).toString(16).padStart(64, '0')}` as `0x${string}`;
+      const nonce3 = `0x${(Date.now() + 2).toString(16).padStart(64, '0')}` as `0x${string}`;
 
       whitelist = [
         {
@@ -130,7 +134,7 @@ describe("Community", async function () {
           account: user1.account.address,
           maxTier: 3n,
           validUntil,
-          nonce,
+          nonce: nonce1,
         },
         {
           community: community.address,
@@ -138,7 +142,7 @@ describe("Community", async function () {
           account: user2.account.address,
           maxTier: 2n,
           validUntil,
-          nonce,
+          nonce: nonce2,
         },
         {
           community: community.address,
@@ -146,7 +150,7 @@ describe("Community", async function () {
           account: user3.account.address,
           maxTier: 1n,
           validUntil,
-          nonce,
+          nonce: nonce3,
         },
       ];
 
@@ -271,7 +275,9 @@ describe("Community", async function () {
       // 设置并加入大群
       const epoch = 1n;
       const validUntil = BigInt(Math.floor(Date.now() / 1000) + 86400 * 30);
-      const nonce = "0x0000000000000000000000000000000000000000000000000000000000000001" as `0x${string}`;
+      
+      // 为每个用户生成唯一的 nonce
+      const nonce = `0x${Date.now().toString(16).padStart(64, '0')}` as `0x${string}`;
 
       whitelist = [
         {
@@ -311,10 +317,7 @@ describe("Community", async function () {
     });
 
     it("应该能创建小群", async function () {
-      const tx = await community.write.createRoom(
-        [{ inviteFee: parseEther("10"), plaintextEnabled: true, messageMaxBytes: 1024 }],
-        { account: user1.account }
-      );
+      const tx = await community.write.createRoom({ account: user1.account });
       const receipt = await publicClient.waitForTransactionReceipt({ hash: tx });
 
       // 检查事件
@@ -328,7 +331,7 @@ describe("Community", async function () {
 
       assert.equal(logs.length, 1);
       assert.equal((logs[0] as any).args.owner?.toLowerCase(), user1.account.address.toLowerCase());
-      assert.equal((logs[0] as any).args.inviteFee, parseEther("10"));
+      assert.equal((logs[0] as any).args.inviteFee, 0n); // 使用默认值 0
 
       const roomAddress = (logs[0] as any).args.room as Address;
       assert.notEqual(roomAddress, "0x0000000000000000000000000000000000000000");
@@ -337,17 +340,84 @@ describe("Community", async function () {
       const room = await viem.getContractAt("Room", roomAddress);
       const owner = await room.read.owner();
       assert.equal(owner.toLowerCase(), user1.account.address.toLowerCase());
+      
+      // 验证使用了大群的默认参数
+      const inviteFee = await room.read.inviteFee();
+      const plaintextEnabled = await room.read.plaintextEnabled();
+      const messageMaxBytes = await room.read.messageMaxBytes();
+      assert.equal(inviteFee, 0n);
+      assert.equal(plaintextEnabled, true);
+      assert.equal(messageMaxBytes, 2048); // 固定为 2048
     });
 
     it("非成员不能创建小群", async function () {
       await assert.rejects(
         async () => {
-          await community.write.createRoom(
-            [{ inviteFee: parseEther("10"), plaintextEnabled: true, messageMaxBytes: 1024 }],
-            { account: user2.account }
-          );
+          await community.write.createRoom({ account: user2.account });
         },
         /NotActiveMember/
+      );
+    });
+
+    it("大群群主应该能设置默认参数", async function () {
+      // 设置新的默认参数
+      const newInviteFee = parseEther("5");
+      const newPlaintextEnabled = false;
+
+      const tx = await community.write.setDefaultRoomParams(
+        [newInviteFee, newPlaintextEnabled],
+        { account: communityOwner.account }
+      );
+      const receipt = await publicClient.waitForTransactionReceipt({ hash: tx });
+
+      // 检查事件
+      const logs = await publicClient.getContractEvents({
+        address: community.address,
+        abi: community.abi,
+        eventName: "DefaultRoomParamsUpdated",
+        fromBlock: receipt.blockNumber,
+        toBlock: receipt.blockNumber,
+      });
+
+      assert.equal(logs.length, 1);
+      assert.equal((logs[0] as any).args.defaultInviteFee, newInviteFee);
+      assert.equal((logs[0] as any).args.defaultPlaintextEnabled, newPlaintextEnabled);
+
+      // 验证状态已更新
+      const defaultInviteFee = await community.read.defaultInviteFee();
+      const defaultPlaintextEnabled = await community.read.defaultPlaintextEnabled();
+      assert.equal(defaultInviteFee, newInviteFee);
+      assert.equal(defaultPlaintextEnabled, newPlaintextEnabled);
+
+      // 创建新小群验证使用新默认值
+      const createTx = await community.write.createRoom({ account: user1.account });
+      const createReceipt = await publicClient.waitForTransactionReceipt({ hash: createTx });
+      const roomLogs = await publicClient.getContractEvents({
+        address: community.address,
+        abi: community.abi,
+        eventName: "RoomCreated",
+        fromBlock: createReceipt.blockNumber,
+        toBlock: createReceipt.blockNumber,
+      });
+
+      const roomAddress = (roomLogs[0] as any).args.room as Address;
+      const room = await viem.getContractAt("Room", roomAddress);
+
+      const roomInviteFee = await room.read.inviteFee();
+      const roomPlaintextEnabled = await room.read.plaintextEnabled();
+      assert.equal(roomInviteFee, newInviteFee);
+      assert.equal(roomPlaintextEnabled, newPlaintextEnabled);
+    });
+
+    it("只有大群群主可以设置默认参数", async function () {
+      await assert.rejects(
+        async () => {
+          await community.write.setDefaultRoomParams(
+            [parseEther("5"), false],
+            { account: user1.account }
+          );
+        },
+        /OwnableUnauthorizedAccount/
       );
     });
   });

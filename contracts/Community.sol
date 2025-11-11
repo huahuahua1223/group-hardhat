@@ -44,6 +44,9 @@ contract Community is Ownable, Pausable {
     
     /// @notice 当转让大群群主时触发
     event CommunityOwnershipTransferred(address indexed previousOwner, address indexed newOwner);
+    
+    /// @notice 当更新小群默认参数时触发
+    event DefaultRoomParamsUpdated(uint256 defaultInviteFee, bool defaultPlaintextEnabled);
 
     /* ===================== 状态变量 ===================== */
     /// @notice 费用代币合约地址
@@ -84,6 +87,15 @@ contract Community is Ownable, Pausable {
     
     /// @notice 已使用的 nonce，防止重放攻击
     mapping(bytes32 => bool) public usedNonces;
+    
+    /// @notice 小群默认邀请费（大群群主设置）
+    uint256 public defaultInviteFee;
+    
+    /// @notice 小群默认是否启用明文消息（大群群主设置）
+    bool public defaultPlaintextEnabled;
+    
+    /// @notice 消息最大字节数（固定为 2048）
+    uint32 public constant MESSAGE_MAX_BYTES = 2048;
 
     /* ===================== 构造函数 ===================== */
     /**
@@ -125,6 +137,10 @@ contract Community is Ownable, Pausable {
         treasury = _treasury;
         roomCreateFee = _roomCreateFee;
         roomImplementation = _roomImplementation;
+        
+        // 设置默认小群参数
+        defaultInviteFee = 0;  // 默认免费邀请
+        defaultPlaintextEnabled = true;  // 默认启用明文消息
 
         _initialized = true;
     }
@@ -218,39 +234,43 @@ contract Community is Ownable, Pausable {
 
     /* ===================== 小群管理 ===================== */
     /**
-     * @notice 创建小群的初始化参数结构体
-     */
-    struct RoomInit {
-        uint256 inviteFee;        // 邀请费用
-        bool plaintextEnabled;    // 是否启用明文消息
-        uint32 messageMaxBytes;   // 消息最大字节数
-    }
-
-    /**
      * @notice 创建小群
      * @dev 只有活跃成员可以创建小群
      *      需要支付固定创建费（默认 50 UNICHAT）
      *      使用 EIP-1167 克隆模式创建 Room 实例
+     *      小群参数使用大群设置的默认值，消息限制固定为 2048 字节
      */
-    function createRoom(RoomInit calldata params) external onlyActiveMember whenNotPaused returns (address room) {
+    function createRoom() external onlyActiveMember whenNotPaused returns (address room) {
         // 从创建者扣除创建费并转入金库（使用 SafeERC20）
         UNICHAT.safeTransferFrom(msg.sender, treasury, roomCreateFee);
 
         // 克隆 Room 实现合约
         room = Clones.clone(roomImplementation);
         
-        // 初始化克隆的 Room 实例
+        // 初始化克隆的 Room 实例，使用大群设置的默认参数
         IRoom(room).initialize(
             msg.sender,
             address(UNICHAT),
             address(this),
-            params.inviteFee,
-            params.plaintextEnabled,
-            params.messageMaxBytes == 0 ? 1024 : params.messageMaxBytes
+            defaultInviteFee,
+            defaultPlaintextEnabled,
+            MESSAGE_MAX_BYTES  // 固定为 2048 字节
         );
 
         rooms.push(room);
-        emit RoomCreated(room, msg.sender, params.inviteFee);
+        emit RoomCreated(room, msg.sender, defaultInviteFee);
+    }
+    
+    /**
+     * @notice 设置小群默认参数
+     * @dev 只有大群群主可以调用，影响后续创建的所有小群
+     * @param _defaultInviteFee 默认邀请费用
+     * @param _defaultPlaintextEnabled 默认是否启用明文消息
+     */
+    function setDefaultRoomParams(uint256 _defaultInviteFee, bool _defaultPlaintextEnabled) external onlyOwner {
+        defaultInviteFee = _defaultInviteFee;
+        defaultPlaintextEnabled = _defaultPlaintextEnabled;
+        emit DefaultRoomParamsUpdated(_defaultInviteFee, _defaultPlaintextEnabled);
     }
 
     /**

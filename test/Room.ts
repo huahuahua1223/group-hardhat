@@ -52,7 +52,11 @@ describe("Room", async function () {
     // 设置 Merkle Tree 并让用户加入
     const epoch = 1n;
     const validUntil = BigInt(Math.floor(Date.now() / 1000) + 86400 * 30);
-    const nonce = "0x0000000000000000000000000000000000000000000000000000000000000001" as `0x${string}`;
+    
+    // 为每个用户生成唯一的 nonce
+    const nonce1 = `0x${Date.now().toString(16).padStart(64, '0')}` as `0x${string}`;
+    const nonce2 = `0x${(Date.now() + 1).toString(16).padStart(64, '0')}` as `0x${string}`;
+    const nonce3 = `0x${(Date.now() + 2).toString(16).padStart(64, '0')}` as `0x${string}`;
 
     const whitelist: MerkleLeaf[] = [
       {
@@ -61,7 +65,7 @@ describe("Room", async function () {
         account: user1.account.address,
         maxTier: 3n,
         validUntil,
-        nonce,
+        nonce: nonce1,
       },
       {
         community: community.address,
@@ -69,7 +73,7 @@ describe("Room", async function () {
         account: user2.account.address,
         maxTier: 2n,
         validUntil,
-        nonce,
+        nonce: nonce2,
       },
       {
         community: community.address,
@@ -77,7 +81,7 @@ describe("Room", async function () {
         account: user3.account.address,
         maxTier: 1n,
         validUntil,
-        nonce,
+        nonce: nonce3,
       },
     ];
 
@@ -113,10 +117,7 @@ describe("Room", async function () {
       { account: user1.account }
     );
 
-    const createTx = await community.write.createRoom(
-      [{ inviteFee: parseEther("10"), plaintextEnabled: true, messageMaxBytes: 1024 }],
-      { account: user1.account }
-    );
+    const createTx = await community.write.createRoom({ account: user1.account });
     const createReceipt = await publicClient.waitForTransactionReceipt({ hash: createTx });
     const roomLogs = await publicClient.getContractEvents({
       address: community.address,
@@ -139,9 +140,9 @@ describe("Room", async function () {
       const membersCount = await room.read.membersCount();
 
       assert.equal(owner.toLowerCase(), user1.account.address.toLowerCase());
-      assert.equal(inviteFee, parseEther("10"));
-      assert.equal(plaintextEnabled, true);
-      assert.equal(messageMaxBytes, 1024);
+      assert.equal(inviteFee, 0n); // 使用大群默认值 0
+      assert.equal(plaintextEnabled, true); // 使用大群默认值 true
+      assert.equal(messageMaxBytes, 2048); // 固定为 2048
       assert.equal(membersCount, 1n); // 创建者自动加入
     });
 
@@ -172,12 +173,7 @@ describe("Room", async function () {
 
   describe("成员管理", () => {
     it("应该能邀请新成员", async function () {
-      // User1 邀请 User2
-      await unichat.write.approve(
-        [room.address, parseEther("10")],
-        { account: user1.account }
-      );
-
+      // User1 邀请 User2（邀请费为 0，无需 approve）
       const tx = await room.write.invite([user2.account.address], { account: user1.account });
       const receipt = await publicClient.waitForTransactionReceipt({ hash: tx });
 
@@ -193,7 +189,7 @@ describe("Room", async function () {
       assert.equal(logs.length, 1);
       assert.equal((logs[0] as any).args.user?.toLowerCase(), user2.account.address.toLowerCase());
       assert.equal((logs[0] as any).args.inviter?.toLowerCase(), user1.account.address.toLowerCase());
-      assert.equal((logs[0] as any).args.fee, parseEther("10"));
+      assert.equal((logs[0] as any).args.fee, 0n); // 使用默认值 0
 
       // 验证成员状态
       const isMember = await room.read.isMember([user2.account.address]);
@@ -205,10 +201,6 @@ describe("Room", async function () {
     it("邀请应该增加 groupKeyEpoch", async function () {
       const epochBefore = await room.read.groupKeyEpoch();
 
-      await unichat.write.approve(
-        [room.address, parseEther("10")],
-        { account: user1.account }
-      );
       await room.write.invite([user2.account.address], { account: user1.account });
 
       const epochAfter = await room.read.groupKeyEpoch();
@@ -216,18 +208,10 @@ describe("Room", async function () {
     });
 
     it("不能邀请已经是成员的用户", async function () {
-      await unichat.write.approve(
-        [room.address, parseEther("10")],
-        { account: user1.account }
-      );
       await room.write.invite([user2.account.address], { account: user1.account });
 
       await assert.rejects(
         async () => {
-          await unichat.write.approve(
-            [room.address, parseEther("10")],
-            { account: user1.account }
-          );
           await room.write.invite([user2.account.address], { account: user1.account });
         },
         /AlreadyMember/
@@ -247,10 +231,6 @@ describe("Room", async function () {
 
     it("owner 应该能踢出成员", async function () {
       // 先邀请 user2
-      await unichat.write.approve(
-        [room.address, parseEther("10")],
-        { account: user1.account }
-      );
       await room.write.invite([user2.account.address], { account: user1.account });
 
       // 踢出 user2
@@ -278,10 +258,6 @@ describe("Room", async function () {
 
     it("成员应该能主动离开", async function () {
       // 先邀请 user2
-      await unichat.write.approve(
-        [room.address, parseEther("10")],
-        { account: user1.account }
-      );
       await room.write.invite([user2.account.address], { account: user1.account });
 
       // User2 离开
@@ -309,10 +285,6 @@ describe("Room", async function () {
   describe("消息功能", () => {
     beforeEach(async () => {
       // 邀请 user2 加入小群
-      await unichat.write.approve(
-        [room.address, parseEther("10")],
-        { account: user1.account }
-      );
       await room.write.invite([user2.account.address], { account: user1.account });
     });
 
@@ -381,7 +353,7 @@ describe("Room", async function () {
     });
 
     it("应该拒绝超长消息", async function () {
-      const longContent = "x".repeat(2000);
+      const longContent = "x".repeat(2049); // 超过 2048 字节限制
 
       await assert.rejects(
         async () => {
