@@ -2,10 +2,11 @@ import type { HardhatUserConfig } from "hardhat/config";
 
 import hardhatToolboxViemPlugin from "@nomicfoundation/hardhat-toolbox-viem";
 import { configVariable } from "hardhat/config";
+import { config as dotenvConfig } from "dotenv";
 
-// 如果需要使用 .env 文件，取消下面两行注释
-// import { config as dotenvConfig } from "dotenv";
-// dotenvConfig();
+// 加载 .env 文件中的环境变量
+// configVariable() 会优先使用 Hardhat vars，如果没有则使用环境变量
+dotenvConfig();
 
 const config: HardhatUserConfig = {
   plugins: [hardhatToolboxViemPlugin],

@@ -26,3 +26,7 @@
 /data/*.csv
 /data/arbitrum/
 !/data/whitelist.example.csv
+
+# Environment variables
+.env
+!.env.example
