@@ -293,6 +293,33 @@ contract Community is Ownable, Pausable {
         return isMember[account] && lastJoinedEpoch[account] == currentEpoch;
     }
 
+    /**
+     * @notice 获取群聊基础元数据
+     * @return topicToken_ 主题代币地址
+     * @return maxTier_ 最大档位
+     * @return name 群名称
+     * @return avatar 头像 CID
+     * @return owner_ 群主地址
+     * @return epoch 当前 epoch 版本
+     */
+    function getMetadata() external view returns (
+        address topicToken_,
+        uint8 maxTier_,
+        string memory name,
+        string memory avatar,
+        address owner_,
+        uint256 epoch
+    ) {
+        return (
+            topicToken,
+            maxTier,
+            name_,
+            avatarCid,
+            owner(),
+            currentEpoch
+        );
+    }
+
     /* ===================== 大群内置消息 ===================== */
     /**
      * @notice 在大群中发送消息
