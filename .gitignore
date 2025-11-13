@@ -23,7 +23,7 @@
 /coverage
 
 # Merkle Tree 生成的输出文件
-/output/*.json
+/output/
 
 # 真实的白名单 CSV 文件（保留示例文件）
 /data/*.csv
@@ -33,3 +33,9 @@
 # Environment variables
 .env
 !.env.example
+
+# VSCode settings
+.vscode/
+
+# Cursor settings
+.cursor/

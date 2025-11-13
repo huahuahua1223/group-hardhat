@@ -55,6 +55,10 @@ async function main() {
   const csvPath = process.env.CSV_PATH || "./data/whitelist.csv";
   console.log(`\n📂 读取 CSV 文件: ${csvPath}\n`);
 
+  // 提取代币符号（从文件名）
+  const symbol = csvPath.split('/').pop()?.replace('.csv', '') || 'UNKNOWN';
+  console.log(`📊 代币符号: ${symbol}\n`);
+
   // 2. 解析 CSV 文件
   const whitelist: MerkleLeaf[] = [];
   
@@ -72,7 +76,7 @@ async function main() {
             const leaf: MerkleLeaf = {
               community: row.community as Address,
               epoch: BigInt(row.epoch),
-              account: row.account as Address,
+              account: row.account.toLowerCase() as Address,  // 转小写
               maxTier: BigInt(row.maxTier),
               validUntil: BigInt(row.validUntil),
               nonce: row.nonce as `0x${string}`,
@@ -202,54 +206,62 @@ async function main() {
   // 7. 保存到文件
   console.log("\n💾 保存结果...\n");
 
-  const outputDir = "./output";
-  const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, -5);
-  const outputPath = `${outputDir}/merkle-proofs-${timestamp}.json`;
-  const metadataPath = `${outputDir}/merkle-metadata-${timestamp}.json`;
-  const proofMapPath = `${outputDir}/proof-map-${timestamp}.json`;
+  // 输出目录结构
+  const chain = csvPath.split('/').slice(-2, -1)[0] || "arbitrum";
+  const metadataDir = `./output/${chain}/metadata`;
+  const proofMapDir = `./output/${chain}/proof-map`;
+
+  // 文件路径（使用代币符号，不使用时间戳）
+  const metadataPath = `${metadataDir}/${symbol}.json`;
+  const proofMapPath = `${proofMapDir}/${symbol}.csv`;
 
   try {
     // 确保输出目录存在
-    await mkdir(outputDir, { recursive: true });
+    await mkdir(metadataDir, { recursive: true });
+    await mkdir(proofMapDir, { recursive: true });
 
-    // 保存完整数据
-    await writeFile(
-      outputPath,
-      JSON.stringify(outputData, (_, value) =>
-        typeof value === "bigint" ? value.toString() : value
-      , 2),
-      "utf-8"
-    );
-    console.log(`✅ 完整数据已保存: ${outputPath}`);
-
-    // 保存 Merkle Root 和元数据（用于链上设置）
+    // 保存精简的元数据
     await writeFile(
       metadataPath,
       JSON.stringify({
         merkleRoot: root,
-        community: whitelist[0].community,
-        epoch: whitelist[0].epoch.toString(),
         totalUsers: whitelist.length,
         treeDepth: depth,
-        generatedAt: outputData.generatedAt,
+        generatedAt: new Date().toISOString(),
       }, null, 2),
       "utf-8"
     );
     console.log(`✅ 元数据已保存: ${metadataPath}`);
 
-    // 创建按用户地址索引的 Proof 映射（方便查询）
-    const proofMap: Record<string, any> = {};
-    proofs.forEach(p => {
-      proofMap[p.account.toLowerCase()] = {
-        maxTier: p.maxTier.toString(),
-        validUntil: p.validUntil.toString(),
-        nonce: p.nonce,
-        proof: p.proof,
-        leafHash: p.leafHash,
-      };
+    // CSV 转义函数
+    function escapeCSV(value: string): string {
+      if (value.includes(',') || value.includes('"') || value.includes('\n')) {
+        return `"${value.replace(/"/g, '""')}"`;
+      }
+      return value;
+    }
+
+    // 生成 CSV 格式的 Proof Map
+    const csvRows: string[] = [];
+    csvRows.push("account,community,epoch,maxTier,validUntil,nonce,proof,leafHash");
+
+    proofs.forEach((p, index) => {
+      const leaf = whitelist[index];
+      const row = [
+        p.account.toLowerCase(),              // 小写地址
+        leaf.community,                        // 群聊地址
+        leaf.epoch.toString(),                 // epoch
+        p.maxTier.toString(),                  // 档位
+        p.validUntil.toString(),               // 有效期
+        p.nonce,                               // nonce
+        escapeCSV(JSON.stringify(p.proof)),    // proof 数组
+        p.leafHash,                            // 叶子哈希
+      ].join(",");
+      csvRows.push(row);
     });
-    await writeFile(proofMapPath, JSON.stringify(proofMap, null, 2), "utf-8");
-    console.log(`✅ Proof 映射已保存: ${proofMapPath}`);
+
+    await writeFile(proofMapPath, csvRows.join("\n"), "utf-8");
+    console.log(`✅ Proof CSV 已保存: ${proofMapPath}`);
 
   } catch (error) {
     console.error("❌ 保存文件失败:", error);
@@ -258,42 +270,48 @@ async function main() {
 
   // 8. 打印使用说明
   console.log("\n" + "=".repeat(60));
-  console.log("✅ Merkle Tree 和 Proof 生成完成！");
+  console.log(`✅ ${symbol} 的 Merkle Tree 和 Proof 生成完成！`);
   console.log("=".repeat(60));
+
+  console.log("\n📁 输出文件:\n");
+  console.log(`   元数据: ${metadataPath}`);
+  console.log(`   Proof:  ${proofMapPath}`);
 
   console.log("\n📋 后续步骤:\n");
   console.log("1️⃣  在链上设置 Merkle Root:");
+  console.log(`   Merkle Root: ${root}`);
   console.log(`   await community.write.setMerkleRoot([`);
   console.log(`     "${root}",`);
-  console.log(`     "ipfs://QmYourMetadataHash"  // 上传元数据到 IPFS`);
+  console.log(`     "ipfs://Qm.../${symbol}.json"`);
   console.log(`   ]);`);
 
-  console.log("\n2️⃣  用户加入大群（示例）:");
-  const exampleUser = proofs[0];
-  console.log(`   // 用户: ${exampleUser.account}`);
-  console.log(`   await community.write.joinCommunity([`);
-  console.log(`     ${exampleUser.maxTier}n,  // maxTier`);
-  console.log(`     ${whitelist[0].epoch}n,   // epoch`);
-  console.log(`     ${exampleUser.validUntil}n,  // validUntil`);
-  console.log(`     "${exampleUser.nonce}",  // nonce`);
-  console.log(`     [  // proof`);
-  exampleUser.proof.slice(0, 2).forEach(p => console.log(`       "${p}",`));
-  if (exampleUser.proof.length > 2) {
-    console.log(`       // ... ${exampleUser.proof.length - 2} more`);
-  }
-  console.log(`     ]`);
-  console.log(`   ]);`);
+  console.log("\n2️⃣  导入 CSV 到 PostgreSQL:");
+  console.log(`   \\COPY proof_map FROM '${proofMapPath}' CSV HEADER;`);
 
-  console.log("\n3️⃣  查询特定用户的 Proof:");
-  console.log(`   // 从 ${proofMapPath.split('/').pop()} 中查询`);
-  console.log(`   const userAddress = "0x...".toLowerCase();`);
-  console.log(`   const proofData = proofMap[userAddress];`);
+  console.log("\n3️⃣  PostgreSQL 表结构:");
+  console.log(`   CREATE TABLE proof_map (`);
+  console.log(`     account VARCHAR(42) PRIMARY KEY,`);
+  console.log(`     community VARCHAR(42) NOT NULL,`);
+  console.log(`     epoch BIGINT NOT NULL,`);
+  console.log(`     max_tier INTEGER NOT NULL,`);
+  console.log(`     valid_until BIGINT NOT NULL,`);
+  console.log(`     nonce VARCHAR(66) NOT NULL,`);
+  console.log(`     proof JSONB NOT NULL,`);
+  console.log(`     leaf_hash VARCHAR(66),`);
+  console.log(`     INDEX idx_community_epoch (community, epoch),`);
+  console.log(`     INDEX idx_account (LOWER(account))`);
+  console.log(`   );`);
+
+  console.log("\n4️⃣  批量处理多个代币:");
+  console.log(`   for symbol in ARB WETH USDT; do`);
+  console.log(`     CSV_PATH=./data/${chain}/$symbol.csv pnpm hardhat run scripts/generate-merkle-proofs.ts`);
+  console.log(`   done`);
 
   console.log("\n💡 提示:");
-  console.log("   • 请妥善保管生成的 JSON 文件");
-  console.log("   • 建议将元数据上传到 IPFS");
-  console.log("   • 用户可通过 API 查询自己的 Proof");
-  console.log("   • Merkle Root 需要群主在链上设置");
+  console.log("   • 文件按代币符号命名，便于管理");
+  console.log("   • CSV 格式可直接导入 PostgreSQL");
+  console.log("   • Next.js 可通过 API 查询用户 Proof");
+  console.log("   • 支持批量检查用户资格");
 }
 
 main()
