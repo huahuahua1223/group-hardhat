@@ -649,6 +649,86 @@ describe("Community", async function () {
         { account: user1.account }
       );
     });
+
+    it("应该能分别获取明文和密文消息", async function () {
+      // 发送混合消息：明文、密文、明文、密文、明文
+      await community.write.sendCommunityMessage(
+        [0, "Plaintext 1", ""],
+        { account: user1.account }
+      );
+      await community.write.sendCommunityMessage(
+        [1, "Encrypted 1", ""],
+        { account: user1.account }
+      );
+      await community.write.sendCommunityMessage(
+        [0, "Plaintext 2", ""],
+        { account: user1.account }
+      );
+      await community.write.sendCommunityMessage(
+        [1, "Encrypted 2", ""],
+        { account: user1.account }
+      );
+      await community.write.sendCommunityMessage(
+        [0, "Plaintext 3", ""],
+        { account: user1.account }
+      );
+
+      // 获取所有明文消息
+      const plaintextMessages = await community.read.getPlaintextMessages([0n, 10n]);
+      assert.equal(plaintextMessages.length, 3);
+      assert.equal(plaintextMessages[0].content, "Plaintext 1");
+      assert.equal(plaintextMessages[0].kind, 0);
+      assert.equal(plaintextMessages[1].content, "Plaintext 2");
+      assert.equal(plaintextMessages[2].content, "Plaintext 3");
+
+      // 获取所有密文消息
+      const encryptedMessages = await community.read.getEncryptedMessages([0n, 10n]);
+      assert.equal(encryptedMessages.length, 2);
+      assert.equal(encryptedMessages[0].content, "Encrypted 1");
+      assert.equal(encryptedMessages[0].kind, 1);
+      assert.equal(encryptedMessages[1].content, "Encrypted 2");
+    });
+
+    it("应该能分页获取明文消息", async function () {
+      // 发送多条混合消息
+      for (let i = 0; i < 10; i++) {
+        await community.write.sendCommunityMessage(
+          [i % 2, `Message ${i}`, ""],
+          { account: user1.account }
+        );
+      }
+
+      // 获取前 5 条中的明文（索引 0, 2, 4）
+      const plaintextMessages = await community.read.getPlaintextMessages([0n, 5n]);
+      assert.equal(plaintextMessages.length, 3);
+      assert.equal(plaintextMessages[0].content, "Message 0");
+      assert.equal(plaintextMessages[1].content, "Message 2");
+      assert.equal(plaintextMessages[2].content, "Message 4");
+    });
+
+    it("应该能分页获取密文消息", async function () {
+      // 发送多条混合消息
+      for (let i = 0; i < 10; i++) {
+        await community.write.sendCommunityMessage(
+          [i % 2, `Message ${i}`, ""],
+          { account: user1.account }
+        );
+      }
+
+      // 获取前 5 条中的密文（索引 1, 3）
+      const encryptedMessages = await community.read.getEncryptedMessages([0n, 5n]);
+      assert.equal(encryptedMessages.length, 2);
+      assert.equal(encryptedMessages[0].content, "Message 1");
+      assert.equal(encryptedMessages[1].content, "Message 3");
+    });
+
+    it("空消息数组应该返回空数组", async function () {
+      const plaintextMessages = await community.read.getPlaintextMessages([0n, 10n]);
+      assert.equal(plaintextMessages.length, 0);
+
+      const encryptedMessages = await community.read.getEncryptedMessages([0n, 10n]);
+      assert.equal(encryptedMessages.length, 0);
+    });
   });
 
   describe("RSA 群聊公钥", () => {

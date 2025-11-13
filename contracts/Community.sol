@@ -358,6 +358,76 @@ contract Community is Ownable, Pausable {
     }
 
     /**
+     * @notice 分页获取大群明文消息（仅返回 kind=0 的消息）
+     * @param start 起始索引（基于全部消息数组）
+     * @param count 最多获取数量
+     * @return 明文消息数组
+     */
+    function getPlaintextMessages(uint256 start, uint256 count) external view returns (Message[] memory) {
+        uint256 total = _messages.length;
+        if (start >= total) return new Message[](0);
+
+        // 第一遍：计算明文消息数量
+        uint256 plaintextCount = 0;
+        uint256 scanned = 0;
+        for (uint256 i = start; i < total && scanned < count; i++) {
+            if (_messages[i].kind == 0) {
+                plaintextCount++;
+            }
+            scanned++;
+        }
+
+        // 第二遍：填充结果数组
+        Message[] memory out = new Message[](plaintextCount);
+        uint256 outIndex = 0;
+        scanned = 0;
+        for (uint256 i = start; i < total && scanned < count; i++) {
+            if (_messages[i].kind == 0) {
+                out[outIndex] = _messages[i];
+                outIndex++;
+            }
+            scanned++;
+        }
+
+        return out;
+    }
+
+    /**
+     * @notice 分页获取大群密文消息（仅返回 kind=1 的消息）
+     * @param start 起始索引（基于全部消息数组）
+     * @param count 最多获取数量
+     * @return 密文消息数组
+     */
+    function getEncryptedMessages(uint256 start, uint256 count) external view returns (Message[] memory) {
+        uint256 total = _messages.length;
+        if (start >= total) return new Message[](0);
+
+        // 第一遍：计算密文消息数量
+        uint256 encryptedCount = 0;
+        uint256 scanned = 0;
+        for (uint256 i = start; i < total && scanned < count; i++) {
+            if (_messages[i].kind == 1) {
+                encryptedCount++;
+            }
+            scanned++;
+        }
+
+        // 第二遍：填充结果数组
+        Message[] memory out = new Message[](encryptedCount);
+        uint256 outIndex = 0;
+        scanned = 0;
+        for (uint256 i = start; i < total && scanned < count; i++) {
+            if (_messages[i].kind == 1) {
+                out[outIndex] = _messages[i];
+                outIndex++;
+            }
+            scanned++;
+        }
+
+        return out;
+    }
+
+    /**
      * @notice 设置大群是否允许明文消息
      * @dev 只有群主可以调用
      */
