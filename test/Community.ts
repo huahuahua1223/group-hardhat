@@ -36,7 +36,13 @@ describe("Community", async function () {
     ]);
 
     // 创建 Community
-    const tx = await factory.write.createCommunity([communityOwner.account.address]);
+    const tx = await factory.write.createCommunity([
+      communityOwner.account.address,
+      unichat.address, // topicToken
+      3, // maxTier
+      "测试大群",
+      "QmTestAvatar",
+    ]);
     const receipt = await publicClient.waitForTransactionReceipt({ hash: tx });
     const logs = await publicClient.getContractEvents({
       address: factory.address,
@@ -513,6 +519,221 @@ describe("Community", async function () {
         },
         /OwnableUnauthorizedAccount/
       );
+    });
+  });
+
+  describe("大群内置消息", () => {
+    let tree: MerkleTree;
+    let whitelist: MerkleLeaf[];
+
+    beforeEach(async () => {
+      // 设置并加入大群
+      const epoch = 1n;
+      const validUntil = BigInt(Math.floor(Date.now() / 1000) + 86400 * 30);
+      const nonce = `0x${Date.now().toString(16).padStart(64, '0')}` as `0x${string}`;
+
+      whitelist = [
+        {
+          community: community.address,
+          epoch,
+          account: user1.account.address,
+          maxTier: 3n,
+          validUntil,
+          nonce,
+        },
+      ];
+
+      const leaves = whitelist.map(computeLeaf);
+      tree = new MerkleTree(leaves);
+      const root = tree.getRoot();
+
+      await community.write.setMerkleRoot(
+        [root, "ipfs://whitelist"],
+        { account: communityOwner.account }
+      );
+
+      // User1 加入大群
+      const leaf = whitelist[0];
+      const leafHash = computeLeaf(leaf);
+      const proof = tree.getProof(leafHash);
+      await community.write.joinCommunity(
+        [leaf.maxTier, leaf.epoch, leaf.validUntil, leaf.nonce, proof],
+        { account: user1.account }
+      );
+    });
+
+    it("应该能发送大群消息", async function () {
+      const content = "Hello from community!";
+      const cid = "QmMessageCid";
+      const kind = 0; // 明文
+
+      const tx = await community.write.sendCommunityMessage(
+        [kind, content, cid],
+        { account: user1.account }
+      );
+      const receipt = await publicClient.waitForTransactionReceipt({ hash: tx });
+
+      // 检查事件
+      const logs = await publicClient.getContractEvents({
+        address: community.address,
+        abi: community.abi,
+        eventName: "CommunityMessageBroadcasted",
+        fromBlock: receipt.blockNumber,
+        toBlock: receipt.blockNumber,
+      });
+
+      assert.equal(logs.length, 1);
+      assert.equal((logs[0] as any).args.sender?.toLowerCase(), user1.account.address.toLowerCase());
+      assert.equal((logs[0] as any).args.kind, kind);
+      assert.equal((logs[0] as any).args.seq, 1n);
+      assert.equal((logs[0] as any).args.cid, cid);
+
+      // 验证状态
+      const count = await community.read.communityMessageCount();
+      assert.equal(count, 1n);
+
+      const [sender, ts, msgKind, msgContent, msgCid] = await community.read.getCommunityMessage([0n]);
+      assert.equal(sender.toLowerCase(), user1.account.address.toLowerCase());
+      assert.equal(msgKind, kind);
+      assert.equal(msgContent, content);
+      assert.equal(msgCid, cid);
+    });
+
+    it("应该能分页获取消息", async function () {
+      // 发送多条消息
+      for (let i = 0; i < 5; i++) {
+        await community.write.sendCommunityMessage(
+          [0, `Message ${i}`, `QmCid${i}`],
+          { account: user1.account }
+        );
+      }
+
+      // 获取前 3 条
+      const messages = await community.read.getCommunityMessages([0n, 3n]);
+      assert.equal(messages.length, 3);
+      assert.equal(messages[0].content, "Message 0");
+      assert.equal(messages[2].content, "Message 2");
+    });
+
+    it("非活跃成员不能发送消息", async function () {
+      await assert.rejects(
+        async () => {
+          await community.write.sendCommunityMessage(
+            [0, "test", ""],
+            { account: user2.account }
+          );
+        },
+        /NotActiveMember/
+      );
+    });
+
+    it("群主应该能禁用明文消息", async function () {
+      await community.write.setCommunityPlaintextEnabled(
+        [false],
+        { account: communityOwner.account }
+      );
+
+      await assert.rejects(
+        async () => {
+          await community.write.sendCommunityMessage(
+            [0, "plaintext", ""],
+            { account: user1.account }
+          );
+        },
+        /PlaintextOff/
+      );
+
+      // 密文应该仍然可以发送
+      await community.write.sendCommunityMessage(
+        [1, "encrypted", ""],
+        { account: user1.account }
+      );
+    });
+  });
+
+  describe("RSA 群聊公钥", () => {
+    it("应该能设置 RSA 公钥", async function () {
+      const publicKey = "-----BEGIN PUBLIC KEY-----\nMIIBIjANBgkq...\n-----END PUBLIC KEY-----";
+      const metadataHash = keccak256(encodePacked(["string"], ["metadata"]));
+
+      const tx = await community.write.setRsaGroupPublicKey(
+        [publicKey, metadataHash],
+        { account: communityOwner.account }
+      );
+      const receipt = await publicClient.waitForTransactionReceipt({ hash: tx });
+
+      // 检查事件
+      const keyLogs = await publicClient.getContractEvents({
+        address: community.address,
+        abi: community.abi,
+        eventName: "RsaGroupPublicKeyUpdated",
+        fromBlock: receipt.blockNumber,
+        toBlock: receipt.blockNumber,
+      });
+
+      assert.equal(keyLogs.length, 1);
+      assert.equal((keyLogs[0] as any).args.epoch, 1n);
+      assert.equal((keyLogs[0] as any).args.rsaPublicKey, publicKey);
+
+      const epochLogs = await publicClient.getContractEvents({
+        address: community.address,
+        abi: community.abi,
+        eventName: "GroupKeyEpochIncreased",
+        fromBlock: receipt.blockNumber,
+        toBlock: receipt.blockNumber,
+      });
+
+      assert.equal(epochLogs.length, 1);
+      assert.equal((epochLogs[0] as any).args.epoch, 1n);
+
+      // 验证状态
+      const storedKey = await community.read.getRsaGroupPublicKey();
+      const epoch = await community.read.getGroupKeyEpoch();
+      assert.equal(storedKey, publicKey);
+      assert.equal(epoch, 1n);
+    });
+
+    it("只有群主可以设置 RSA 公钥", async function () {
+      await assert.rejects(
+        async () => {
+          await community.write.setRsaGroupPublicKey(
+            ["fake key", keccak256(encodePacked(["string"], ["test"]))],
+            { account: user1.account }
+          );
+        },
+        /OwnableUnauthorizedAccount/
+      );
+    });
+
+    it("应该能多次更新公钥并递增 epoch", async function () {
+      const key1 = "key1";
+      const key2 = "key2";
+      const hash = keccak256(encodePacked(["string"], ["test"]));
+
+      await community.write.setRsaGroupPublicKey([key1, hash], { account: communityOwner.account });
+      let epoch = await community.read.getGroupKeyEpoch();
+      assert.equal(epoch, 1n);
+
+      await community.write.setRsaGroupPublicKey([key2, hash], { account: communityOwner.account });
+      epoch = await community.read.getGroupKeyEpoch();
+      assert.equal(epoch, 2n);
+
+      const storedKey = await community.read.getRsaGroupPublicKey();
+      assert.equal(storedKey, key2);
+    });
+  });
+
+  describe("元数据", () => {
+    it("应该正确初始化元数据", async function () {
+      const topicToken = await community.read.topicToken();
+      const maxTier = await community.read.maxTier();
+      const name = await community.read.name_();
+      const avatarCid = await community.read.avatarCid();
+
+      assert.equal(topicToken.toLowerCase(), unichat.address.toLowerCase());
+      assert.equal(maxTier, 3);
+      assert.equal(name, "测试大群");
+      assert.equal(avatarCid, "QmTestAvatar");
     });
   });
 });

@@ -18,6 +18,7 @@ interface ICommunityReadonly {
  * @notice 小群合约，支持自定义邀请费和消息管理
  * @dev 群主可自定义邀请费；任何群成员可发送消息
  *      消息同时存储在事件和状态中，支持明文和密文
+ *      Room 功能保持不变，完全兼容新的 Community 接口
  */
 contract Room is Pausable {
     using SafeERC20 for IERC20;

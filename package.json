@@ -13,7 +13,7 @@
     "compile": "hardhat compile",
     "clean": "hardhat clean",
     "deploy:local": "hardhat ignition deploy ignition/modules/CommunityFactory.ts",
-    "deploy:sepolia": "hardhat ignition deploy --network sepolia ignition/modules/CommunityFactory.ts",
+    "deploy:arbitrum": "hardhat ignition deploy --network arbitrum ignition/modules/CommunityFactory.ts",
     "script:create-community": "hardhat run scripts/create-community.ts",
     "script:create-room": "hardhat run scripts/create-room.ts",
     "merkle:generate": "hardhat run scripts/generate-merkle-proofs.ts"
@@ -41,6 +41,7 @@
   "type": "module",
   "dependencies": {
     "csv-parse": "^6.1.0",
+    "dotenv": "^17.2.3",
     "merkletreejs": "^0.6.0"
   }
 }

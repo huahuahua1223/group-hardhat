@@ -37,7 +37,13 @@ describe("集成测试：完整群聊流程", async function () {
     // ========== 第二步：创建大群 ==========
     console.log("\n🏘️  第二步：创建大群...");
     
-    const createTx = await factory.write.createCommunity([communityOwner.account.address]);
+    const createTx = await factory.write.createCommunity([
+      communityOwner.account.address,
+      unichat.address, // topicToken
+      5, // maxTier
+      "集成测试大群",
+      "QmIntegrationTestAvatar",
+    ]);
     const createReceipt = await publicClient.waitForTransactionReceipt({ hash: createTx });
     const createLogs = await publicClient.getContractEvents({
       address: factory.address,
@@ -50,6 +56,7 @@ describe("集成测试：完整群聊流程", async function () {
     const communityAddress = createLogs[0].args.community as Address;
     const community = await viem.getContractAt("Community", communityAddress);
     console.log(`   ✅ Community: ${communityAddress}`);
+    console.log(`   ✅ 主题代币: UNICHAT, 档位: 5`);
 
     // ========== 第三步：生成 Merkle Tree 并设置 Root ==========
     console.log("\n🌳 第三步：生成 Merkle Tree...");

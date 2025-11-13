@@ -12,22 +12,28 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 interface ICommunity {
     function initialize(
         address communityOwner,
-        address unichatToken,
+        address feeToken,            // 用于支付房间创建费的代币（UNICHAT）
         address treasury,
         uint256 roomCreateFee,
-        address roomImplementation
+        address roomImplementation,
+
+        // === 新增：主题代币 & 唯一键 & 元数据 ===
+        address topicToken,          // 这个大群绑定的"主题代币"
+        uint8   maxTier,             // 1..7
+        string calldata name_,       // 群名称
+        string calldata avatarCid_   // 头像CID
     ) external;
 }
 
 /**
  * @title CommunityFactory
- * @notice 系统管理员用于创建大群（Community）实例，配置全局参数
+ * @notice 创建大群（Community）并保证 (topicToken, maxTier) 全局唯一
  * @dev 使用 EIP-1167 最小代理模式克隆 Community 实例，节省部署 gas
  */
 contract CommunityFactory is Ownable, Pausable {
     /* ===================== 事件 ===================== */
     /// @notice 当创建新的大群时触发
-    event CommunityCreated(address indexed community, address indexed owner);
+    event CommunityCreated(address indexed community, address indexed owner, address indexed topicToken, uint8 maxTier);
     
     /// @notice 当更新实现合约地址时触发
     event ImplementationsUpdated(address communityImpl, address roomImpl);
@@ -53,6 +59,9 @@ contract CommunityFactory is Ownable, Pausable {
     
     /// @notice Room 实现合约地址（用于克隆）
     address public roomImplementation;
+
+    /// @notice (topicToken, maxTier) -> Community 地址，保证唯一
+    mapping(bytes32 => address) private _communityByTokenTier;
 
     /* ===================== 构造函数 ===================== */
     /**
@@ -108,15 +117,36 @@ contract CommunityFactory is Ownable, Pausable {
         emit TreasuryUpdated(newTreasury);
     }
 
+    /* ===================== 读取 ===================== */
+    /**
+     * @notice 根据 (topicToken, maxTier) 查询对应的 Community 地址
+     * @dev 如果返回零地址，说明该组合尚未创建
+     */
+    function getCommunityByTokenTier(address topicToken, uint8 maxTier) external view returns (address) {
+        return _communityByTokenTier[_key(topicToken, maxTier)];
+    }
+
     /* ===================== 核心函数 ===================== */
     /**
-     * @notice 创建新的大群（Community）
+     * @notice 创建新的大群（唯一键：topicToken + maxTier）
      * @dev 仅系统管理员可创建大群，并指定大群群主
      *      使用 EIP-1167 克隆模式创建 Community 实例
+     *      保证 (topicToken, maxTier) 全局唯一
      */
-    function createCommunity(address communityOwner) external onlyOwner whenNotPaused returns (address community) {
+    function createCommunity(
+        address communityOwner,
+        address topicToken,
+        uint8   maxTier,            // 1..7
+        string calldata name_,
+        string calldata avatarCid_
+    ) external onlyOwner whenNotPaused returns (address community) {
         require(communityImplementation != address(0) && roomImplementation != address(0), "ImplNotSet");
-        
+        require(communityOwner != address(0) && topicToken != address(0), "ZeroAddr");
+        require(maxTier >= 1 && maxTier <= 7, "BadTier");
+
+        bytes32 k = _key(topicToken, maxTier);
+        require(_communityByTokenTier[k] == address(0), "CommunityExists");
+
         // 使用最小代理模式克隆 Community 合约
         community = Clones.clone(communityImplementation);
         
@@ -126,12 +156,26 @@ contract CommunityFactory is Ownable, Pausable {
             address(UNICHAT),
             treasury,
             roomCreateFee,
-            roomImplementation
+            roomImplementation,
+            topicToken,
+            maxTier,
+            name_,
+            avatarCid_
         );
-        
-        emit CommunityCreated(community, communityOwner);
+
+        _communityByTokenTier[k] = community;
+        emit CommunityCreated(community, communityOwner, topicToken, maxTier);
     }
 
+    /* ===================== 内部函数 ===================== */
+    /**
+     * @notice 计算 (topicToken, maxTier) 的唯一键
+     */
+    function _key(address token, uint8 tier) internal pure returns (bytes32) {
+        return keccak256(abi.encodePacked(token, tier));
+    }
+
+    /* ===================== 暂停 ===================== */
     /**
      * @notice 暂停工厂合约
      * @dev 只有系统管理员可以调用，暂停后禁止创建新的大群

@@ -36,7 +36,13 @@ describe("Room", async function () {
     ]);
 
     // 创建 Community
-    const tx = await factory.write.createCommunity([communityOwner.account.address]);
+    const tx = await factory.write.createCommunity([
+      communityOwner.account.address,
+      unichat.address, // topicToken
+      4, // maxTier
+      "Room测试大群",
+      "QmRoomTestAvatar",
+    ]);
     const receipt = await publicClient.waitForTransactionReceipt({ hash: tx });
     const logs = await publicClient.getContractEvents({
       address: factory.address,

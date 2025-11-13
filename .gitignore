@@ -24,4 +24,5 @@
 
 # 真实的白名单 CSV 文件（保留示例文件）
 /data/*.csv
+/data/arbitrum/
 !/data/whitelist.example.csv

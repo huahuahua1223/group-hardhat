@@ -39,14 +39,29 @@ contract Community is Ownable, Pausable {
     /// @notice 当用户加入大群时触发
     event Joined(address indexed account, uint256 tier, uint256 epoch);
     
-    /// @notice 当创建新的小群时触发
+    // 大群内置消息
+    event CommunityMessageBroadcasted(
+        address indexed community,
+        address indexed sender,
+        uint8   kind,          // 0: 明文, 1: 密文
+        uint256 indexed seq,
+        bytes32 contentHash,
+        string  cid,
+        uint40  ts
+    );
+
+    event DefaultRoomParamsUpdated(uint256 defaultInviteFee, bool defaultPlaintextEnabled);
     event RoomCreated(address indexed room, address indexed owner, uint256 inviteFee);
+
+    // 群聊密钥
+    event GroupKeyEpochIncreased(uint64 epoch, bytes32 metadataHash);
+    event RsaGroupPublicKeyUpdated(uint64 epoch, string rsaPublicKey);
+
+    // 元数据
+    event CommunityMetadataSet(address indexed topicToken, uint8 maxTier, string name, string avatarCid);
     
     /// @notice 当转让大群群主时触发
     event CommunityOwnershipTransferred(address indexed previousOwner, address indexed newOwner);
-    
-    /// @notice 当更新小群默认参数时触发
-    event DefaultRoomParamsUpdated(uint256 defaultInviteFee, bool defaultPlaintextEnabled);
 
     /* ===================== 状态变量 ===================== */
     /// @notice 费用代币合约地址
@@ -88,6 +103,29 @@ contract Community is Ownable, Pausable {
     /// @notice 已使用的 nonce，防止重放攻击（按用户划分作用域）
     mapping(address => mapping(bytes32 => bool)) public usedNonces;
     
+    // ========== 新增：大群本体消息 ==========
+    struct Message {
+        address sender;
+        uint40  ts;
+        uint8   kind;      // 0 明文, 1 密文
+        string  content;   // 明/密文（前端加密）
+        string  cid;       // 外部引用（可选）
+    }
+    Message[] private _messages;
+    uint256 public seq;                   // 大群消息序号
+    bool    public plaintextEnabled;      // 是否允许明文（默认 true）
+    uint32  public communityMessageMaxBytes;  // 默认 2048
+
+    // ========== 新增：RSA 群聊公钥 ==========
+    string public rsaGroupPublicKey;      // 前端使用的群聊公钥（PEM/Base64等文本）
+    uint64 public groupKeyEpoch;          // 轮换版本
+
+    // ========== 新增：主题代币 & 唯一键 & 元数据 ==========
+    address public topicToken;            // 这个大群绑定的主题代币
+    uint8   public maxTier;               // 1..7
+    string  public name_;                 // 群名称
+    string  public avatarCid;             // 头像 CID
+    
     /// @notice 小群默认邀请费（大群群主设置）
     uint256 public defaultInviteFee;
     
@@ -128,10 +166,18 @@ contract Community is Ownable, Pausable {
         address unichatToken,
         address _treasury,
         uint256 _roomCreateFee,
-        address _roomImplementation
+        address _roomImplementation,
+
+        // 新增元数据
+        address _topicToken,
+        uint8   _maxTier,
+        string calldata _name,
+        string calldata _avatarCid
     ) external {
         require(!_initialized, "Initialized");
         require(communityOwner != address(0) && unichatToken != address(0) && _treasury != address(0), "ZeroAddr");
+        require(_topicToken != address(0), "ZeroTopic");
+        require(_maxTier >= 1 && _maxTier <= 7, "BadTier");
 
         // 将克隆实例的 owner 设置为指定的群主
         _transferOwnership(communityOwner);
@@ -140,6 +186,18 @@ contract Community is Ownable, Pausable {
         treasury = _treasury;
         roomCreateFee = _roomCreateFee;
         roomImplementation = _roomImplementation;
+        
+        // 大群消息默认参数
+        plaintextEnabled = true;
+        communityMessageMaxBytes = 2048;
+
+        // 主题代币 & 元数据
+        topicToken = _topicToken;
+        maxTier    = _maxTier;
+        name_      = _name;
+        avatarCid  = _avatarCid;
+
+        emit CommunityMetadataSet(_topicToken, _maxTier, _name, _avatarCid);
         
         // 设置默认小群参数
         defaultInviteFee = 0;  // 默认免费邀请
@@ -169,7 +227,7 @@ contract Community is Ownable, Pausable {
      */
     function eligible(
         address account,
-        uint256 maxTier,
+        uint256 _maxTier,
         uint256 epoch,
         uint256 validUntil,
         bytes32 nonce,
@@ -177,7 +235,7 @@ contract Community is Ownable, Pausable {
     ) external view returns (bool) {
         if (epoch != currentEpoch) return false;
         if (validUntil != 0 && block.timestamp > validUntil) return false;
-        bytes32 leaf = computeLeaf(address(this), epoch, account, maxTier, validUntil, nonce);
+        bytes32 leaf = computeLeaf(address(this), epoch, account, _maxTier, validUntil, nonce);
         return proof.verify(merkleRoots[epoch], leaf);
     }
 
@@ -188,7 +246,7 @@ contract Community is Ownable, Pausable {
      *      必须使用当前 epoch 的 proof，且不能过期
      */
     function joinCommunity(
-        uint256 maxTier,
+        uint256 _maxTier,
         uint256 epoch,
         uint256 validUntil,
         bytes32 nonce,
@@ -197,7 +255,7 @@ contract Community is Ownable, Pausable {
         require(epoch == currentEpoch, "EpochMismatch");
         if (validUntil != 0) require(block.timestamp <= validUntil, "ProofExpired");
 
-        bytes32 leaf = computeLeaf(address(this), epoch, msg.sender, maxTier, validUntil, nonce);
+        bytes32 leaf = computeLeaf(address(this), epoch, msg.sender, _maxTier, validUntil, nonce);
         require(proof.verify(merkleRoots[epoch], leaf), "BadProof");
         
         // 防止 nonce 重放攻击（按用户作用域）
@@ -205,10 +263,10 @@ contract Community is Ownable, Pausable {
         usedNonces[msg.sender][nonce] = true;
 
         isMember[msg.sender] = true;
-        memberTier[msg.sender] = maxTier;
+        memberTier[msg.sender] = _maxTier;
         lastJoinedEpoch[msg.sender] = epoch;
 
-        emit Joined(msg.sender, maxTier, epoch);
+        emit Joined(msg.sender, _maxTier, epoch);
     }
 
     /**
@@ -220,11 +278,11 @@ contract Community is Ownable, Pausable {
         address community,
         uint256 epoch,
         address account,
-        uint256 maxTier,
+        uint256 _maxTier,
         uint256 validUntil,
         bytes32 nonce
     ) public pure returns (bytes32) {
-        return keccak256(abi.encodePacked(community, epoch, account, maxTier, validUntil, nonce));
+        return keccak256(abi.encodePacked(community, epoch, account, _maxTier, validUntil, nonce));
     }
 
     /**
@@ -233,6 +291,115 @@ contract Community is Ownable, Pausable {
      */
     function isActiveMember(address account) external view returns (bool) {
         return isMember[account] && lastJoinedEpoch[account] == currentEpoch;
+    }
+
+    /* ===================== 大群内置消息 ===================== */
+    /**
+     * @notice 在大群中发送消息
+     * @dev 只有活跃成员可以调用
+     *      kind: 0=明文, 1=密文
+     */
+    function sendCommunityMessage(
+        uint8   kind,        // 0=明文,1=密文
+        string calldata content,
+        string calldata cid
+    ) external onlyActiveMember whenNotPaused {
+        if (kind == 0) {
+            require(plaintextEnabled, "PlaintextOff");
+        }
+        require(bytes(content).length <= communityMessageMaxBytes, "TooLarge");
+
+        seq += 1;
+        uint40 ts = uint40(block.timestamp);
+        bytes32 contentHash = keccak256(bytes(content));
+
+        emit CommunityMessageBroadcasted(address(this), msg.sender, kind, seq, contentHash, cid, ts);
+
+        _messages.push(Message({
+            sender: msg.sender,
+            ts: ts,
+            kind: kind,
+            content: content,
+            cid: cid
+        }));
+    }
+
+    /**
+     * @notice 获取大群消息总数
+     */
+    function communityMessageCount() external view returns (uint256) {
+        return _messages.length;
+    }
+
+    /**
+     * @notice 获取指定索引的大群消息
+     */
+    function getCommunityMessage(uint256 index) external view returns (
+        address sender, uint40 ts, uint8 kind, string memory content, string memory cid
+    ) {
+        Message storage m = _messages[index];
+        return (m.sender, m.ts, m.kind, m.content, m.cid);
+    }
+
+    /**
+     * @notice 分页获取大群消息
+     * @param start 起始索引
+     * @param count 获取数量
+     */
+    function getCommunityMessages(uint256 start, uint256 count) external view returns (Message[] memory) {
+        uint256 total = _messages.length;
+        if (start >= total) return new Message[](0);
+        uint256 end = start + count;
+        if (end > total) end = total;
+        uint256 n = end - start;
+        Message[] memory out = new Message[](n);
+        for (uint256 i = 0; i < n; i++) out[i] = _messages[start + i];
+        return out;
+    }
+
+    /**
+     * @notice 设置大群是否允许明文消息
+     * @dev 只有群主可以调用
+     */
+    function setCommunityPlaintextEnabled(bool on) external onlyOwner { 
+        plaintextEnabled = on; 
+    }
+
+    /**
+     * @notice 设置大群消息最大字节数
+     * @dev 只有群主可以调用
+     */
+    function setCommunityMessageMaxBytes(uint32 n) external onlyOwner { 
+        require(n > 0, "BadMax"); 
+        communityMessageMaxBytes = n; 
+    }
+
+    /* ===================== RSA 群聊公钥 ===================== */
+    /**
+     * @notice 设置 RSA 群聊公钥
+     * @dev 只有群主可以调用，会自增 groupKeyEpoch
+     * @param newKey 新的 RSA 公钥（PEM 或 Base64 格式）
+     * @param metadataHash 元数据哈希
+     */
+    function setRsaGroupPublicKey(string calldata newKey, bytes32 metadataHash) external onlyOwner {
+        rsaGroupPublicKey = newKey;
+        groupKeyEpoch += 1;
+        emit RsaGroupPublicKeyUpdated(groupKeyEpoch, newKey);
+        emit GroupKeyEpochIncreased(groupKeyEpoch, metadataHash);
+    }
+
+    /**
+     * @notice 获取 RSA 群聊公钥
+     */
+    function getRsaGroupPublicKey() external view returns (string memory) { 
+        return rsaGroupPublicKey; 
+    }
+
+    /**
+     * @notice 获取群密钥 epoch 版本
+     */
+    function getGroupKeyEpoch() external view returns (uint64) { 
+        return groupKeyEpoch; 
     }
 
     /* ===================== 小群管理 ===================== */
