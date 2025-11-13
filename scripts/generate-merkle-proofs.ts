@@ -55,12 +55,18 @@ async function main() {
   const csvPath = process.env.CSV_PATH || "./data/whitelist.csv";
   console.log(`\n📂 读取 CSV 文件: ${csvPath}\n`);
 
-  // 提取代币符号（从文件名）
-  const symbol = csvPath.split('/').pop()?.replace('.csv', '') || 'UNKNOWN';
-  console.log(`📊 代币符号: ${symbol}\n`);
+  // 提取代币符号和档位（从路径）
+  // 例如: ./data/arbitrum/ARB/1.csv -> Symbol=ARB, maxTier=1
+  const pathParts = csvPath.split('/');
+  const symbol = pathParts[pathParts.length - 2] || 'UNKNOWN';  // ARB
+  const maxTier = pathParts[pathParts.length - 1].replace('.csv', '') || 'UNKNOWN';  // 1
+
+  console.log(`📊 代币符号: ${symbol}`);
+  console.log(`🎯 档位: ${maxTier}\n`);
 
   // 2. 解析 CSV 文件
   const whitelist: MerkleLeaf[] = [];
+  const expectedTier = BigInt(maxTier);
   
   try {
     await new Promise<void>((resolve, reject) => {
@@ -91,6 +97,11 @@ async function main() {
             }
             if (!leaf.nonce.startsWith("0x") || leaf.nonce.length !== 66) {
               throw new Error(`无效的 nonce: ${row.nonce}`);
+            }
+
+            // 验证档位一致性
+            if (leaf.maxTier !== expectedTier) {
+              console.warn(`⚠️  用户 ${leaf.account} 的档位 ${leaf.maxTier} 与文件档位 ${maxTier} 不一致`);
             }
 
             whitelist.push(leaf);
@@ -207,13 +218,15 @@ async function main() {
   console.log("\n💾 保存结果...\n");
 
   // 输出目录结构
-  const chain = csvPath.split('/').slice(-2, -1)[0] || "arbitrum";
-  const metadataDir = `./output/${chain}/metadata`;
-  const proofMapDir = `./output/${chain}/proof-map`;
+  const chain = pathParts.includes('arbitrum') ? 'arbitrum' : 
+                pathParts.includes('ethereum') ? 'ethereum' : 'unknown';
 
-  // 文件路径（使用代币符号，不使用时间戳）
-  const metadataPath = `${metadataDir}/${symbol}.json`;
-  const proofMapPath = `${proofMapDir}/${symbol}.csv`;
+  const metadataDir = `./output/${chain}/metadata/${symbol}`;
+  const proofMapDir = `./output/${chain}/proof-map/${symbol}`;
+
+  // 文件路径（使用档位作为文件名）
+  const metadataPath = `${metadataDir}/${maxTier}.json`;
+  const proofMapPath = `${proofMapDir}/${maxTier}.csv`;
 
   try {
     // 确保输出目录存在

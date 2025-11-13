@@ -13,10 +13,13 @@
     "compile": "hardhat compile",
     "clean": "hardhat clean",
     "deploy:local": "hardhat ignition deploy ignition/modules/CommunityFactory.ts",
-    "deploy:arbitrum": "hardhat ignition deploy --network arbitrum --verify ignition/modules/CommunityFactory.ts",
+    "deploy:arbitrum": "hardhat ignition deploy --network arbitrum --reset --verify ignition/modules/CommunityFactory.ts",
     "script:create-community": "hardhat run scripts/create-community.ts",
     "script:create-room": "hardhat run scripts/create-room.ts",
-    "merkle:generate": "hardhat run scripts/generate-merkle-proofs.ts"
+    "merkle:generate": "hardhat run scripts/generate-merkle-proofs.ts",
+    "create-communities": "hardhat run scripts/create-communities.ts --network arbitrum",
+    "set-merkle-roots": "hardhat run scripts/set-merkle-roots.ts --network arbitrum",
+    "merkle:generate-all": "powershell -File scripts/generate-all-proofs.ps1"
   },
   "keywords": [
     "blockchain",
