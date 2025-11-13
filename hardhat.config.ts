@@ -48,6 +48,12 @@ const config: HardhatUserConfig = {
       accounts: [configVariable("ARBITRUM_PRIVATE_KEY")],
     },
   },
+  verify: {
+    etherscan: {
+      // 统一的 Etherscan V2 API key
+      apiKey: configVariable("ETHERSCAN_API_KEY"),
+    },
+  },
 };
 
 export default config;
