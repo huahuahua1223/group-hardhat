@@ -246,20 +246,15 @@ async function main() {
     );
     console.log(`✅ 元数据已保存: ${metadataPath}`);
 
-    // CSV 转义函数
-    function escapeCSV(value: string): string {
-      if (value.includes(',') || value.includes('"') || value.includes('\n')) {
-        return `"${value.replace(/"/g, '""')}"`;
-      }
-      return value;
-    }
-
     // 生成 CSV 格式的 Proof Map
     const csvRows: string[] = [];
     csvRows.push("account,community,epoch,maxTier,validUntil,nonce,proof,leafHash");
 
     proofs.forEach((p, index) => {
       const leaf = whitelist[index];
+      // 将 proof 数组格式化为带外层双引号的形式，防止 CSV 分隔符问题
+      const proofArray = `"[${p.proof.join(',')}]"`;
+      
       const row = [
         p.account.toLowerCase(),              // 小写地址
         leaf.community,                        // 群聊地址
@@ -267,7 +262,7 @@ async function main() {
         p.maxTier.toString(),                  // 档位
         p.validUntil.toString(),               // 有效期
         p.nonce,                               // nonce
-        escapeCSV(JSON.stringify(p.proof)),    // proof 数组
+        proofArray,                            // proof 数组（外层带引号）
         p.leafHash,                            // 叶子哈希
       ].join(",");
       csvRows.push(row);
@@ -309,11 +304,16 @@ async function main() {
   console.log(`     max_tier INTEGER NOT NULL,`);
   console.log(`     valid_until BIGINT NOT NULL,`);
   console.log(`     nonce VARCHAR(66) NOT NULL,`);
-  console.log(`     proof JSONB NOT NULL,`);
+  console.log(`     proof TEXT NOT NULL,`);
   console.log(`     leaf_hash VARCHAR(66),`);
   console.log(`     INDEX idx_community_epoch (community, epoch),`);
   console.log(`     INDEX idx_account (LOWER(account))`);
   console.log(`   );`);
+  
+  console.log("\n💡 前端解析 Proof:");
+  console.log(`   // proof 格式："[0xabc...,0xdef...]"`);
+  console.log(`   // 去掉外层引号`);
+  console.log(`   const proofArray = proof.slice(1, -1).split(',');  // 去掉 "[ 和 ]"`);
 
   console.log("\n4️⃣  批量处理多个代币:");
   console.log(`   for symbol in ARB WETH USDT; do`);
