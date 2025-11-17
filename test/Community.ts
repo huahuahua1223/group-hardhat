@@ -816,5 +816,357 @@ describe("Community", async function () {
       assert.equal(avatarCid, "QmTestAvatar");
     });
   });
+
+  describe("成员查询", () => {
+    let tree: MerkleTree;
+    let whitelist: MerkleLeaf[];
+    let epoch: bigint;
+
+    beforeEach(async () => {
+      // 设置并加入大群
+      epoch = 1n;
+      const validUntil = BigInt(Math.floor(Date.now() / 1000) + 86400 * 30);
+      
+      // 为每个用户生成唯一的 nonce
+      const nonce1 = `0x${Date.now().toString(16).padStart(64, '0')}` as `0x${string}`;
+      const nonce2 = `0x${(Date.now() + 1).toString(16).padStart(64, '0')}` as `0x${string}`;
+      const nonce3 = `0x${(Date.now() + 2).toString(16).padStart(64, '0')}` as `0x${string}`;
+
+      whitelist = [
+        {
+          community: community.address,
+          epoch,
+          account: user1.account.address,
+          maxTier: 3n,
+          validUntil,
+          nonce: nonce1,
+        },
+        {
+          community: community.address,
+          epoch,
+          account: user2.account.address,
+          maxTier: 2n,
+          validUntil,
+          nonce: nonce2,
+        },
+        {
+          community: community.address,
+          epoch,
+          account: user3.account.address,
+          maxTier: 1n,
+          validUntil,
+          nonce: nonce3,
+        },
+      ];
+
+      const leaves = whitelist.map(computeLeaf);
+      tree = new MerkleTree(leaves);
+      const root = tree.getRoot();
+
+      await community.write.setMerkleRoot(
+        [root, "ipfs://whitelist"],
+        { account: communityOwner.account }
+      );
+    });
+
+    it("应该能获取成员总数", async function () {
+      // 初始时应该为 0
+      let count = await community.read.getMembersCount();
+      assert.equal(count, 0n);
+
+      // user1 加入
+      const leaf1 = whitelist[0];
+      const proof1 = tree.getProof(computeLeaf(leaf1));
+      await community.write.joinCommunity(
+        [leaf1.maxTier, leaf1.epoch, leaf1.validUntil, leaf1.nonce, proof1],
+        { account: user1.account }
+      );
+
+      count = await community.read.getMembersCount();
+      assert.equal(count, 1n);
+
+      // user2 加入
+      const leaf2 = whitelist[1];
+      const proof2 = tree.getProof(computeLeaf(leaf2));
+      await community.write.joinCommunity(
+        [leaf2.maxTier, leaf2.epoch, leaf2.validUntil, leaf2.nonce, proof2],
+        { account: user2.account }
+      );
+
+      count = await community.read.getMembersCount();
+      assert.equal(count, 2n);
+
+      // user3 加入
+      const leaf3 = whitelist[2];
+      const proof3 = tree.getProof(computeLeaf(leaf3));
+      await community.write.joinCommunity(
+        [leaf3.maxTier, leaf3.epoch, leaf3.validUntil, leaf3.nonce, proof3],
+        { account: user3.account }
+      );
+
+      count = await community.read.getMembersCount();
+      assert.equal(count, 3n);
+    });
+
+    it("应该能分页获取成员列表", async function () {
+      // 所有用户加入
+      for (const leaf of whitelist) {
+        const proof = tree.getProof(computeLeaf(leaf));
+        const account = leaf.account === user1.account.address ? user1.account :
+                       leaf.account === user2.account.address ? user2.account : user3.account;
+        await community.write.joinCommunity(
+          [leaf.maxTier, leaf.epoch, leaf.validUntil, leaf.nonce, proof],
+          { account }
+        );
+      }
+
+      // 获取所有成员
+      const allMembers = await community.read.getMembers([0n, 10n]);
+      assert.equal(allMembers.length, 3);
+      // 使用小写比较地址（合约返回的地址可能是小写的）
+      const memberAddresses = allMembers.map((addr: Address) => addr.toLowerCase());
+      assert.equal(memberAddresses.includes(user1.account.address.toLowerCase()), true);
+      assert.equal(memberAddresses.includes(user2.account.address.toLowerCase()), true);
+      assert.equal(memberAddresses.includes(user3.account.address.toLowerCase()), true);
+
+      // 分页获取：第一页
+      const page1 = await community.read.getMembers([0n, 2n]);
+      assert.equal(page1.length, 2);
+
+      // 分页获取：第二页
+      const page2 = await community.read.getMembers([2n, 2n]);
+      assert.equal(page2.length, 1);
+      assert.equal(page2[0].toLowerCase(), allMembers[2].toLowerCase());
+    });
+
+    it("应该能获取当前活跃成员总数", async function () {
+      // user1 和 user2 加入
+      const leaf1 = whitelist[0];
+      const proof1 = tree.getProof(computeLeaf(leaf1));
+      await community.write.joinCommunity(
+        [leaf1.maxTier, leaf1.epoch, leaf1.validUntil, leaf1.nonce, proof1],
+        { account: user1.account }
+      );
+
+      const leaf2 = whitelist[1];
+      const proof2 = tree.getProof(computeLeaf(leaf2));
+      await community.write.joinCommunity(
+        [leaf2.maxTier, leaf2.epoch, leaf2.validUntil, leaf2.nonce, proof2],
+        { account: user2.account }
+      );
+
+      // 当前 epoch 应该有 2 个活跃成员
+      let activeCount = await community.read.getActiveMembersCount();
+      assert.equal(activeCount, 2n);
+
+      // 更新 epoch（新白名单只包含 user1）
+      const currentEpoch = await community.read.currentEpoch();
+      const nextEpoch = currentEpoch + 1n;
+      const validUntil = BigInt(Math.floor(Date.now() / 1000) + 86400 * 30);
+      const newNonce1 = `0x${(Date.now() + 100).toString(16).padStart(64, '0')}` as `0x${string}`;
+
+      const newWhitelist: MerkleLeaf[] = [
+        {
+          community: community.address,
+          epoch: nextEpoch,
+          account: user1.account.address,
+          maxTier: 3n,
+          validUntil,
+          nonce: newNonce1,
+        },
+      ];
+
+      const newLeaves = newWhitelist.map(computeLeaf);
+      const newTree = new MerkleTree(newLeaves);
+      const newRoot = newTree.getRoot();
+
+      await community.write.setMerkleRoot(
+        [newRoot, "ipfs://new-whitelist"],
+        { account: communityOwner.account }
+      );
+
+      // user1 重新加入新 epoch
+      const newLeaf1 = newWhitelist[0];
+      const newProof1 = newTree.getProof(computeLeaf(newLeaf1));
+      await community.write.joinCommunity(
+        [newLeaf1.maxTier, newLeaf1.epoch, newLeaf1.validUntil, newLeaf1.nonce, newProof1],
+        { account: user1.account }
+      );
+
+      // 现在只有 user1 是活跃成员（user2 不在新 epoch 中）
+      activeCount = await community.read.getActiveMembersCount();
+      assert.equal(activeCount, 1n);
+
+      // 但总成员数仍然是 2（包含历史成员 user2）
+      const totalCount = await community.read.getMembersCount();
+      assert.equal(totalCount, 2n);
+    });
+
+    it("应该能分页获取当前活跃成员列表", async function () {
+      // 所有用户加入 epoch 1
+      for (const leaf of whitelist) {
+        const proof = tree.getProof(computeLeaf(leaf));
+        const account = leaf.account === user1.account.address ? user1.account :
+                       leaf.account === user2.account.address ? user2.account : user3.account;
+        await community.write.joinCommunity(
+          [leaf.maxTier, leaf.epoch, leaf.validUntil, leaf.nonce, proof],
+          { account }
+        );
+      }
+
+      // 获取所有活跃成员（应该是 3 个）
+      const activeMembers = await community.read.getActiveMembers([0n, 10n]);
+      assert.equal(activeMembers.length, 3);
+      // 使用小写比较地址（合约返回的地址可能是小写的）
+      const activeAddresses = activeMembers.map((addr: Address) => addr.toLowerCase());
+      assert.equal(activeAddresses.includes(user1.account.address.toLowerCase()), true);
+      assert.equal(activeAddresses.includes(user2.account.address.toLowerCase()), true);
+      assert.equal(activeAddresses.includes(user3.account.address.toLowerCase()), true);
+
+      // 更新 epoch（新白名单只包含 user1 和 user3）
+      const currentEpoch = await community.read.currentEpoch();
+      const nextEpoch = currentEpoch + 1n;
+      const validUntil = BigInt(Math.floor(Date.now() / 1000) + 86400 * 30);
+      const newNonce1 = `0x${(Date.now() + 100).toString(16).padStart(64, '0')}` as `0x${string}`;
+      const newNonce3 = `0x${(Date.now() + 101).toString(16).padStart(64, '0')}` as `0x${string}`;
+
+      const newWhitelist: MerkleLeaf[] = [
+        {
+          community: community.address,
+          epoch: nextEpoch,
+          account: user1.account.address,
+          maxTier: 3n,
+          validUntil,
+          nonce: newNonce1,
+        },
+        {
+          community: community.address,
+          epoch: nextEpoch,
+          account: user3.account.address,
+          maxTier: 1n,
+          validUntil,
+          nonce: newNonce3,
+        },
+      ];
+
+      const newLeaves = newWhitelist.map(computeLeaf);
+      const newTree = new MerkleTree(newLeaves);
+      const newRoot = newTree.getRoot();
+
+      await community.write.setMerkleRoot(
+        [newRoot, "ipfs://new-whitelist"],
+        { account: communityOwner.account }
+      );
+
+      // user1 和 user3 重新加入新 epoch
+      for (const leaf of newWhitelist) {
+        const proof = newTree.getProof(computeLeaf(leaf));
+        const account = leaf.account === user1.account.address ? user1.account : user3.account;
+        await community.write.joinCommunity(
+          [leaf.maxTier, leaf.epoch, leaf.validUntil, leaf.nonce, proof],
+          { account }
+        );
+      }
+
+      // 现在只有 user1 和 user3 是活跃成员
+      const newActiveMembers = await community.read.getActiveMembers([0n, 10n]);
+      assert.equal(newActiveMembers.length, 2);
+      // 使用小写比较地址
+      const newActiveAddresses = newActiveMembers.map((addr: Address) => addr.toLowerCase());
+      assert.equal(newActiveAddresses.includes(user1.account.address.toLowerCase()), true);
+      assert.equal(newActiveAddresses.includes(user3.account.address.toLowerCase()), true);
+      assert.equal(newActiveAddresses.includes(user2.account.address.toLowerCase()), false);
+
+      // 但所有历史成员仍然在总列表中
+      const allMembers = await community.read.getMembers([0n, 10n]);
+      assert.equal(allMembers.length, 3);
+    });
+
+    it("空成员列表应该返回 0 和空数组", async function () {
+      const count = await community.read.getMembersCount();
+      assert.equal(count, 0n);
+
+      const activeCount = await community.read.getActiveMembersCount();
+      assert.equal(activeCount, 0n);
+
+      const members = await community.read.getMembers([0n, 10n]);
+      assert.equal(members.length, 0);
+
+      const activeMembers = await community.read.getActiveMembers([0n, 10n]);
+      assert.equal(activeMembers.length, 0);
+    });
+
+    it("分页超出范围应该返回空数组", async function () {
+      // user1 加入
+      const leaf1 = whitelist[0];
+      const proof1 = tree.getProof(computeLeaf(leaf1));
+      await community.write.joinCommunity(
+        [leaf1.maxTier, leaf1.epoch, leaf1.validUntil, leaf1.nonce, proof1],
+        { account: user1.account }
+      );
+
+      // 超出范围的查询应该返回空数组
+      const members = await community.read.getMembers([10n, 5n]);
+      assert.equal(members.length, 0);
+
+      const activeMembers = await community.read.getActiveMembers([10n, 5n]);
+      assert.equal(activeMembers.length, 0);
+    });
+
+    it("同一用户重新加入不应该重复计数", async function () {
+      // user1 第一次加入
+      const leaf1 = whitelist[0];
+      const proof1 = tree.getProof(computeLeaf(leaf1));
+      await community.write.joinCommunity(
+        [leaf1.maxTier, leaf1.epoch, leaf1.validUntil, leaf1.nonce, proof1],
+        { account: user1.account }
+      );
+
+      let count = await community.read.getMembersCount();
+      assert.equal(count, 1n);
+
+      // 更新 epoch，user1 重新加入
+      const currentEpoch = await community.read.currentEpoch();
+      const nextEpoch = currentEpoch + 1n;
+      const validUntil = BigInt(Math.floor(Date.now() / 1000) + 86400 * 30);
+      const newNonce1 = `0x${(Date.now() + 100).toString(16).padStart(64, '0')}` as `0x${string}`;
+
+      const newWhitelist: MerkleLeaf[] = [
+        {
+          community: community.address,
+          epoch: nextEpoch,
+          account: user1.account.address,
+          maxTier: 3n,
+          validUntil,
+          nonce: newNonce1,
+        },
+      ];
+
+      const newLeaves = newWhitelist.map(computeLeaf);
+      const newTree = new MerkleTree(newLeaves);
+      const newRoot = newTree.getRoot();
+
+      await community.write.setMerkleRoot(
+        [newRoot, "ipfs://new-whitelist"],
+        { account: communityOwner.account }
+      );
+
+      const newLeaf1 = newWhitelist[0];
+      const newProof1 = newTree.getProof(computeLeaf(newLeaf1));
+      await community.write.joinCommunity(
+        [newLeaf1.maxTier, newLeaf1.epoch, newLeaf1.validUntil, newLeaf1.nonce, newProof1],
+        { account: user1.account }
+      );
+
+      // 总成员数应该仍然是 1（不重复计数）
+      count = await community.read.getMembersCount();
+      assert.equal(count, 1n);
+
+      // 成员列表应该只包含 user1 一次
+      const members = await community.read.getMembers([0n, 10n]);
+      assert.equal(members.length, 1);
+      assert.equal(members[0].toLowerCase(), user1.account.address.toLowerCase());
+    });
+  });
 });
 

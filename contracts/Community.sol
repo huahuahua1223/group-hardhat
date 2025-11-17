@@ -97,6 +97,12 @@ contract Community is Ownable, Pausable {
     /// @notice 所有创建的小群地址列表
     address[] public rooms;
 
+    /// @notice 大群成员总数
+    uint256 public membersCount;
+
+    /// @notice 所有成员地址列表
+    address[] public members;
+
     /// @notice 是否已初始化（防止重复初始化）
     bool private _initialized;
     
@@ -261,6 +267,13 @@ contract Community is Ownable, Pausable {
         // 防止 nonce 重放攻击（按用户作用域）
         require(!usedNonces[msg.sender][nonce], "NonceUsed");
         usedNonces[msg.sender][nonce] = true;
+
+        // 如果是新成员，添加到成员列表并增加计数
+        bool isNewMember = !isMember[msg.sender];
+        if (isNewMember) {
+            members.push(msg.sender);
+            membersCount += 1;
+        }
 
         isMember[msg.sender] = true;
         memberTier[msg.sender] = _maxTier;
@@ -570,6 +583,106 @@ contract Community is Ownable, Pausable {
         address[] memory result = new address[](actualCount);
         for (uint256 i = 0; i < actualCount; i++) {
             result[i] = rooms[start + i];
+        }
+        
+        return result;
+    }
+
+    /* ===================== 成员查询 ===================== */
+    /**
+     * @notice 获取大群成员总数（包含所有历史成员）
+     * @return 成员总数
+     */
+    function getMembersCount() external view returns (uint256) {
+        return membersCount;
+    }
+
+    /**
+     * @notice 分页获取成员地址列表（包含所有历史成员）
+     * @dev 分页查询，返回区间 [start, start+count) 的成员地址
+     *      注意：此函数返回所有曾经加入过的成员，包括已不在当前 epoch 白名单中的成员
+     * @param start 起始索引
+     * @param count 查询数量
+     * @return 成员地址数组
+     */
+    function getMembers(uint256 start, uint256 count) external view returns (address[] memory) {
+        uint256 totalMembers = members.length;
+        
+        // 如果起始位置超出范围，返回空数组
+        if (start >= totalMembers) {
+            return new address[](0);
+        }
+        
+        // 计算实际返回的数量
+        uint256 end = start + count;
+        if (end > totalMembers) {
+            end = totalMembers;
+        }
+        uint256 actualCount = end - start;
+        
+        // 创建返回数组并填充数据
+        address[] memory result = new address[](actualCount);
+        for (uint256 i = 0; i < actualCount; i++) {
+            result[i] = members[start + i];
+        }
+        
+        return result;
+    }
+
+    /**
+     * @notice 获取当前活跃成员总数（仅统计当前 epoch 的成员）
+     * @dev 只统计 lastJoinedEpoch == currentEpoch 的成员
+     * @return 活跃成员总数
+     */
+    function getActiveMembersCount() external view returns (uint256) {
+        uint256 count = 0;
+        uint256 total = members.length;
+        for (uint256 i = 0; i < total; i++) {
+            if (isMember[members[i]] && lastJoinedEpoch[members[i]] == currentEpoch) {
+                count++;
+            }
+        }
+        return count;
+    }
+
+    /**
+     * @notice 分页获取当前活跃成员地址列表（仅当前 epoch 的成员）
+     * @dev 分页查询，只返回 lastJoinedEpoch == currentEpoch 的成员
+     *      此函数会遍历所有历史成员并过滤出活跃成员，可能消耗较多 gas
+     * @param start 起始索引（基于活跃成员列表）
+     * @param count 查询数量
+     * @return 活跃成员地址数组
+     */
+    function getActiveMembers(uint256 start, uint256 count) external view returns (address[] memory) {
+        // 第一遍：收集所有活跃成员地址
+        address[] memory activeList = new address[](members.length);
+        uint256 activeCount = 0;
+        uint256 total = members.length;
+        
+        for (uint256 i = 0; i < total; i++) {
+            address member = members[i];
+            if (isMember[member] && lastJoinedEpoch[member] == currentEpoch) {
+                activeList[activeCount] = member;
+                activeCount++;
+            }
+        }
+        
+        // 如果起始位置超出范围，返回空数组
+        if (start >= activeCount) {
+            return new address[](0);
+        }
+        
+        // 计算实际返回的数量
+        uint256 end = start + count;
+        if (end > activeCount) {
+            end = activeCount;
+        }
+        uint256 actualCount = end - start;
+        
+        // 创建返回数组并填充数据
+        address[] memory result = new address[](actualCount);
+        for (uint256 i = 0; i < actualCount; i++) {
+            result[i] = activeList[start + i];
         }
         
         return result;
