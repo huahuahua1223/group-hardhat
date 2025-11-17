@@ -367,6 +367,258 @@ describe("Community", async function () {
     });
   });
 
+  describe("群主直接拉人加入", () => {
+    it("群主应该能直接拉人加入", async function () {
+      const tier = 2n;
+      const currentEpoch = await community.read.currentEpoch();
+
+      const tx = await community.write.inviteMember(
+        [user1.account.address, tier],
+        { account: communityOwner.account }
+      );
+      const receipt = await publicClient.waitForTransactionReceipt({ hash: tx });
+
+      // 检查事件
+      const logs = await publicClient.getContractEvents({
+        address: community.address,
+        abi: community.abi,
+        eventName: "Joined",
+        fromBlock: receipt.blockNumber,
+        toBlock: receipt.blockNumber,
+      });
+
+      assert.equal(logs.length, 1);
+      assert.equal((logs[0] as any).args.account?.toLowerCase(), user1.account.address.toLowerCase());
+      assert.equal((logs[0] as any).args.tier, tier);
+      assert.equal((logs[0] as any).args.epoch, currentEpoch);
+
+      // 验证状态
+      const isMember = await community.read.isMember([user1.account.address]);
+      const memberTier = await community.read.memberTier([user1.account.address]);
+      const lastEpoch = await community.read.lastJoinedEpoch([user1.account.address]);
+      const isActive = await community.read.isActiveMember([user1.account.address]);
+
+      assert.equal(isMember, true);
+      assert.equal(memberTier, tier);
+      assert.equal(lastEpoch, currentEpoch);
+      assert.equal(isActive, true);
+
+      // 验证成员计数
+      const membersCount = await community.read.getMembersCount();
+      assert.equal(membersCount, 1n);
+    });
+
+    it("群主应该能拉多个用户加入", async function () {
+      await community.write.inviteMember(
+        [user1.account.address, 3n],
+        { account: communityOwner.account }
+      );
+      await community.write.inviteMember(
+        [user2.account.address, 2n],
+        { account: communityOwner.account }
+      );
+      await community.write.inviteMember(
+        [user3.account.address, 1n],
+        { account: communityOwner.account }
+      );
+
+      // 验证所有用户都成为成员
+      assert.equal(await community.read.isActiveMember([user1.account.address]), true);
+      assert.equal(await community.read.isActiveMember([user2.account.address]), true);
+      assert.equal(await community.read.isActiveMember([user3.account.address]), true);
+
+      // 验证成员计数
+      const membersCount = await community.read.getMembersCount();
+      assert.equal(membersCount, 3n);
+
+      // 验证成员列表
+      const members = await community.read.getMembers([0n, 10n]);
+      assert.equal(members.length, 3);
+      const memberAddresses = members.map((addr: Address) => addr.toLowerCase());
+      assert.equal(memberAddresses.includes(user1.account.address.toLowerCase()), true);
+      assert.equal(memberAddresses.includes(user2.account.address.toLowerCase()), true);
+      assert.equal(memberAddresses.includes(user3.account.address.toLowerCase()), true);
+    });
+
+    it("只有群主可以拉人加入", async function () {
+      await assert.rejects(
+        async () => {
+          await community.write.inviteMember(
+            [user1.account.address, 3n],
+            { account: user1.account }
+          );
+        },
+        /OwnableUnauthorizedAccount/
+      );
+    });
+
+    it("不应该接受零地址", async function () {
+      const zeroAddress = "0x0000000000000000000000000000000000000000" as Address;
+      
+      await assert.rejects(
+        async () => {
+          await community.write.inviteMember(
+            [zeroAddress, 3n],
+            { account: communityOwner.account }
+          );
+        },
+        /ZeroAddr/
+      );
+    });
+
+    it("不应该接受超出最大档位的 tier", async function () {
+      const maxTier = await community.read.maxTier();
+      const invalidTier = BigInt(maxTier) + 1n;
+
+      await assert.rejects(
+        async () => {
+          await community.write.inviteMember(
+            [user1.account.address, invalidTier],
+            { account: communityOwner.account }
+          );
+        },
+        /BadTier/
+      );
+    });
+
+    it("不应该接受小于 1 的 tier", async function () {
+      await assert.rejects(
+        async () => {
+          await community.write.inviteMember(
+            [user1.account.address, 0n],
+            { account: communityOwner.account }
+          );
+        },
+        /BadTier/
+      );
+    });
+
+    it("同一用户被多次拉入不应该重复计数", async function () {
+      // 第一次拉入
+      await community.write.inviteMember(
+        [user1.account.address, 3n],
+        { account: communityOwner.account }
+      );
+
+      let membersCount = await community.read.getMembersCount();
+      assert.equal(membersCount, 1n);
+
+      // 再次拉入（更新 tier）
+      await community.write.inviteMember(
+        [user1.account.address, 2n],
+        { account: communityOwner.account }
+      );
+
+      // 成员数应该仍然是 1
+      membersCount = await community.read.getMembersCount();
+      assert.equal(membersCount, 1n);
+
+      // 但 tier 应该更新为 2
+      const tier = await community.read.memberTier([user1.account.address]);
+      assert.equal(tier, 2n);
+
+      // 成员列表应该只包含 user1 一次
+      const members = await community.read.getMembers([0n, 10n]);
+      assert.equal(members.length, 1);
+      assert.equal(members[0].toLowerCase(), user1.account.address.toLowerCase());
+    });
+
+    it("拉入的用户应该能创建小群", async function () {
+      // 群主拉入 user1
+      await community.write.inviteMember(
+        [user1.account.address, 3n],
+        { account: communityOwner.account }
+      );
+
+      // 给 user1 铸造代币并授权
+      await unichat.write.mint([user1.account.address, parseEther("1000")]);
+      await unichat.write.approve(
+        [community.address, parseEther("50")],
+        { account: user1.account }
+      );
+
+      // user1 应该能创建小群
+      const tx = await community.write.createRoom({ account: user1.account });
+      const receipt = await publicClient.waitForTransactionReceipt({ hash: tx });
+
+      const logs = await publicClient.getContractEvents({
+        address: community.address,
+        abi: community.abi,
+        eventName: "RoomCreated",
+        fromBlock: receipt.blockNumber,
+        toBlock: receipt.blockNumber,
+      });
+
+      assert.equal(logs.length, 1);
+      assert.equal((logs[0] as any).args.owner?.toLowerCase(), user1.account.address.toLowerCase());
+    });
+
+    it("拉入的用户应该能发送大群消息", async function () {
+      // 群主拉入 user1
+      await community.write.inviteMember(
+        [user1.account.address, 3n],
+        { account: communityOwner.account }
+      );
+
+      // user1 应该能发送消息
+      const content = "Hello from invited member!";
+      const tx = await community.write.sendCommunityMessage(
+        [0, content, ""],
+        { account: user1.account }
+      );
+      const receipt = await publicClient.waitForTransactionReceipt({ hash: tx });
+
+      const logs = await publicClient.getContractEvents({
+        address: community.address,
+        abi: community.abi,
+        eventName: "CommunityMessageBroadcasted",
+        fromBlock: receipt.blockNumber,
+        toBlock: receipt.blockNumber,
+      });
+
+      assert.equal(logs.length, 1);
+      assert.equal((logs[0] as any).args.sender?.toLowerCase(), user1.account.address.toLowerCase());
+      assert.equal((logs[0] as any).args.kind, 0);
+    });
+
+    it("拉入的用户在 epoch 更新后仍然是活跃成员", async function () {
+      const currentEpoch = await community.read.currentEpoch();
+      
+      // 群主拉入 user1
+      await community.write.inviteMember(
+        [user1.account.address, 3n],
+        { account: communityOwner.account }
+      );
+
+      // 验证 user1 是活跃成员
+      assert.equal(await community.read.isActiveMember([user1.account.address]), true);
+      assert.equal(await community.read.lastJoinedEpoch([user1.account.address]), currentEpoch);
+
+      // 更新 epoch（设置新的 Merkle Root）
+      const newRoot = keccak256(encodePacked(["string"], ["new-epoch"]));
+      await community.write.setMerkleRoot(
+        [newRoot, "ipfs://new-epoch"],
+        { account: communityOwner.account }
+      );
+
+      const newEpoch = await community.read.currentEpoch();
+      assert.equal(newEpoch, currentEpoch + 1n);
+
+      // user1 的 lastJoinedEpoch 仍然是旧的 epoch，所以不再是活跃成员
+      assert.equal(await community.read.isActiveMember([user1.account.address]), false);
+
+      // 群主可以再次拉入 user1，更新到新 epoch
+      await community.write.inviteMember(
+        [user1.account.address, 3n],
+        { account: communityOwner.account }
+      );
+
+      // 现在 user1 应该是活跃成员了
+      assert.equal(await community.read.isActiveMember([user1.account.address]), true);
+      assert.equal(await community.read.lastJoinedEpoch([user1.account.address]), newEpoch);
+    });
+  });
+
   describe("创建小群", () => {
     let tree: MerkleTree;
     let whitelist: MerkleLeaf[];

@@ -268,18 +268,42 @@ contract Community is Ownable, Pausable {
         require(!usedNonces[msg.sender][nonce], "NonceUsed");
         usedNonces[msg.sender][nonce] = true;
 
+        _addMember(msg.sender, _maxTier, epoch);
+    }
+
+    /**
+     * @notice 群主直接拉人加入大群（无需 Merkle Proof）
+     * @dev 只有群主可以调用，直接添加成员，无需验证默克尔树
+     * @param account 要添加的成员地址
+     * @param _maxTier 成员的资产档位（1-7）
+     */
+    function inviteMember(address account, uint256 _maxTier) external onlyOwner whenNotPaused {
+        require(account != address(0), "ZeroAddr");
+        require(_maxTier >= 1 && _maxTier <= maxTier, "BadTier");
+        
+        _addMember(account, _maxTier, currentEpoch);
+    }
+
+    /**
+     * @notice 内部函数：添加成员
+     * @dev 统一处理成员添加逻辑，包括新成员计数和状态更新
+     * @param account 成员地址
+     * @param _maxTier 资产档位
+     * @param epoch 加入的 epoch
+     */
+    function _addMember(address account, uint256 _maxTier, uint256 epoch) internal {
         // 如果是新成员，添加到成员列表并增加计数
-        bool isNewMember = !isMember[msg.sender];
+        bool isNewMember = !isMember[account];
         if (isNewMember) {
-            members.push(msg.sender);
+            members.push(account);
             membersCount += 1;
         }
 
-        isMember[msg.sender] = true;
-        memberTier[msg.sender] = _maxTier;
-        lastJoinedEpoch[msg.sender] = epoch;
+        isMember[account] = true;
+        memberTier[account] = _maxTier;
+        lastJoinedEpoch[account] = epoch;
 
-        emit Joined(msg.sender, _maxTier, epoch);
+        emit Joined(account, _maxTier, epoch);
     }
 
     /**
