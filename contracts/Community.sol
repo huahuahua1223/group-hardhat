@@ -7,6 +7,7 @@ import {Clones} from "@openzeppelin/contracts/proxy/Clones.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {MerkleProof} from "@openzeppelin/contracts/utils/cryptography/MerkleProof.sol";
+import {Strings} from "@openzeppelin/contracts/utils/Strings.sol";
 
 /**
  * @notice Room 合约初始化接口
@@ -20,6 +21,22 @@ interface IRoom {
         bool plaintextEnabled,
         uint32 messageMaxBytes
     ) external;
+}
+
+/**
+ * @notice 红包合约接口（用于内联红包调用）
+ */
+interface IUniChatRedPacket {
+    function createGroupPacketFor(
+        address creator,
+        address token,
+        uint256 totalAmount,
+        uint256 totalShares,
+        bool isRandom,
+        address groupContract,
+        uint256[] calldata shareAmounts,
+        uint256 expiryDuration
+    ) external returns (uint256 packetId);
 }
 
 /**
@@ -140,6 +157,9 @@ contract Community is Ownable, Pausable {
     
     /// @notice 消息最大字节数（固定为 2048）
     uint32 public constant MESSAGE_MAX_BYTES = 2048;
+
+    /// @notice 红包合约引用（用于内联红包调用）
+    IUniChatRedPacket public redPacket;
 
     /* ===================== 构造函数 ===================== */
     /**
@@ -368,6 +388,23 @@ contract Community is Ownable, Pausable {
         string calldata content,
         string calldata cid
     ) external onlyActiveMember whenNotPaused {
+        _sendCommunityMessage(msg.sender, kind, content, cid);
+    }
+
+    /**
+     * @notice 内部函数：发送大群消息
+     * @dev 抽取核心逻辑供 sendCommunityMessage 和 sendRedPacketMessage 复用
+     * @param from 消息发送者地址
+     * @param kind 消息类型：0=明文, 1=密文
+     * @param content 消息内容
+     * @param cid 外部引用（可选）
+     */
+    function _sendCommunityMessage(
+        address from,
+        uint8   kind,
+        string memory content,
+        string memory cid
+    ) internal {
         if (kind == 0) {
             require(plaintextEnabled, "PlaintextOff");
         }
@@ -377,15 +414,61 @@ contract Community is Ownable, Pausable {
         uint40 ts = uint40(block.timestamp);
         bytes32 contentHash = keccak256(bytes(content));
 
-        emit CommunityMessageBroadcasted(address(this), msg.sender, kind, seq, contentHash, cid, ts);
+        emit CommunityMessageBroadcasted(address(this), from, kind, seq, contentHash, cid, ts);
 
         _messages.push(Message({
-            sender: msg.sender,
+            sender: from,
             ts: ts,
             kind: kind,
             content: content,
             cid: cid
         }));
+    }
+
+    /**
+     * @notice 一笔交易完成：创建群红包 + 写入一条红包消息
+     * @dev 只有活跃成员可以调用，用户需提前 approve 代币给红包合约
+     * @param token 红包代币
+     * @param totalAmount 红包总金额
+     * @param totalShares 份数
+     * @param isRandom 是否随机红包
+     * @param shareAmounts 随机红包时的每份金额数组；非随机时传空数组
+     * @param expiryDuration 有效期秒数
+     * @param msgKind 消息 kind（0=明文,1=密文）
+     * @param memo 红包祝福语，显示在聊天记录里的 content
+     */
+    function sendRedPacketMessage(
+        address token,
+        uint256 totalAmount,
+        uint256 totalShares,
+        bool    isRandom,
+        uint256[] calldata shareAmounts,
+        uint256 expiryDuration,
+        uint8   msgKind,
+        string calldata memo
+    ) external onlyActiveMember whenNotPaused returns (uint256 packetId) {
+        require(address(redPacket) != address(0), "RedPacket not set");
+
+        // 1. 调红包合约创建群红包（注意这里传 creator=msg.sender）
+        packetId = redPacket.createGroupPacketFor(
+            msg.sender,
+            token,
+            totalAmount,
+            totalShares,
+            isRandom,
+            address(this),   // 当前群合约
+            shareAmounts,
+            expiryDuration
+        );
+
+        // 2. 把 packetId 编到 cid 里
+        string memory cid = string.concat(
+            "redpacket:v1:",
+            Strings.toString(packetId)
+        );
+
+        // 3. 调内部函数写一条群消息（sender=用户）
+        _sendCommunityMessage(msg.sender, msgKind, memo, cid);
     }
 
     /**
@@ -739,5 +822,16 @@ contract Community is Ownable, Pausable {
         address oldOwner = owner();
         _transferOwnership(newOwner);
         emit CommunityOwnershipTransferred(oldOwner, newOwner);
+    }
+
+    /**
+     * @notice 设置红包合约地址（只能设置一次）
+     * @dev 只有群主可以调用
+     * @param redPacket_ 红包合约地址
+     */
+    function setRedPacket(address redPacket_) external onlyOwner {
+        require(address(redPacket) == address(0), "already set");
+        require(redPacket_ != address(0), "ZeroAddr");
+        redPacket = IUniChatRedPacket(redPacket_);
     }
 }
