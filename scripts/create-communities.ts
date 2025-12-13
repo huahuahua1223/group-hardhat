@@ -24,9 +24,9 @@ const TOKENS = {
 };
 
 const AVATARS = {
-  ARB: "https://arbiscan.io/token/images/arbitrumone2_32_new.png",
-  USDT: "https://arbiscan.io/token/images/usdt0_64.png",
-  WETH: "https://arbiscan.io/token/images/weth_28.png",
+  ARB: "bafkreihfrzi6bbjt6eap3e6xwlgwyhck3fcwxs6eujegzhhpaqpijz3tim",
+  USDT: "bafkreibn4y6llleughtp5pgu37lve7mymvcffpo5i2h6iw4t4iwo6z5ocu",
+  WETH: "bafkreicijvbdd5rbejczpxv47ttblwsbjqsijxzml4svwsekdojbejilfe",
 };
 
 const TIER_NAMES: Record<number, string> = {
@@ -185,7 +185,10 @@ async function main() {
     for (const tier of [1, 2, 3]) {
       counter++;
       const name = `${symbol} ${TIER_NAMES[tier]}`;
-      const avatarCid = AVATARS[symbol as keyof typeof AVATARS];
+      const avatarCid = AVATARS[symbol as keyof typeof AVATARS] ?? "";
+      if (!avatarCid) {
+        throw new Error(`未找到 ${symbol} 对应的头像 CID`);
+      }
       const key = getCommunityKey(symbol, tier);
 
       console.log(`  [${counter}/9] ${name} (档位${tier})`);
