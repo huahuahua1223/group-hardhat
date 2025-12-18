@@ -10,7 +10,7 @@ import {MerkleProof} from "@openzeppelin/contracts/utils/cryptography/MerkleProo
 import {Strings} from "@openzeppelin/contracts/utils/Strings.sol";
 
 /**
- * @notice Room 合约初始化接口
+ * @notice Room contract initialization interface
  */
 interface IRoom {
     function initialize(
@@ -24,7 +24,7 @@ interface IRoom {
 }
 
 /**
- * @notice 红包合约接口（用于内联红包调用）
+ * @notice Red packet contract interface (for inline red packet calls)
  */
 interface IUniChatRedPacket {
     function createGroupPacketFor(
@@ -41,26 +41,26 @@ interface IUniChatRedPacket {
 
 /**
  * @title Community
- * @notice 大群合约，基于 Merkle Tree 的白名单准入机制
- * @dev 仅存储 Merkle Root + Epoch，成员需提交 MerkleProof 上链绑定后才可创建/参与小群
- *      使用 EIP-1167 最小代理模式克隆 Room 实例
+ * @notice Large group contract with Merkle Tree-based whitelist access mechanism
+ * @dev Only stores Merkle Root + Epoch, members must submit MerkleProof on-chain binding before creating/participating in rooms
+ *      Uses EIP-1167 minimal proxy pattern to clone Room instances
  */
 contract Community is Ownable, Pausable {
     using MerkleProof for bytes32[];
     using SafeERC20 for IERC20;
 
-    /* ===================== 事件 ===================== */
-    /// @notice 当更新 Merkle Root 时触发
+    /* ===================== Events ===================== */
+    /// @notice Emitted when Merkle Root is updated
     event MerkleRootUpdated(uint256 indexed epoch, bytes32 root, string uri);
     
-    /// @notice 当用户加入大群时触发
+    /// @notice Emitted when a user joins the large group
     event Joined(address indexed account, uint256 tier, uint256 epoch);
     
-    // 大群内置消息
+    // Large group built-in messages
     event CommunityMessageBroadcasted(
         address indexed community,
         address indexed sender,
-        uint8   kind,          // 0: 明文, 1: 密文
+        uint8   kind,          // 0: plaintext, 1: ciphertext
         uint256 indexed seq,
         bytes32 contentHash,
         string  cid,
@@ -70,139 +70,139 @@ contract Community is Ownable, Pausable {
     event DefaultRoomParamsUpdated(uint256 defaultInviteFee, bool defaultPlaintextEnabled);
     event RoomCreated(address indexed room, address indexed owner, uint256 inviteFee);
 
-    // 群聊密钥
+    // Group chat key
     event GroupKeyEpochIncreased(uint64 epoch, bytes32 metadataHash);
     event RsaGroupPublicKeyUpdated(uint64 epoch, string rsaPublicKey);
 
-    // 密钥分发
+    // Key distribution
     event KeyDistributed(uint64 indexed distributionEpoch, bytes32 merkleRoot, string ipfsCid, uint40 timestamp);
 
-    // 元数据
+    // Metadata
     event CommunityMetadataSet(address indexed topicToken, uint8 maxTier, string name, string avatarCid);
     
-    /// @notice 当转让大群群主时触发
+    /// @notice Emitted when large group ownership is transferred
     event CommunityOwnershipTransferred(address indexed previousOwner, address indexed newOwner);
 
-    /* ===================== 状态变量 ===================== */
-    /// @notice 费用代币合约地址
+    /* ===================== State Variables ===================== */
+    /// @notice Fee token contract address
     IERC20 public UNICHAT;
     
-    /// @notice 金库地址，接收创建小群的费用
+    /// @notice Treasury address that receives room creation fees
     address public treasury;
     
-    /// @notice 创建小群所需费用
+    /// @notice Fee required to create a room
     uint256 public roomCreateFee;
     
-    /// @notice Room 实现合约地址（用于克隆）
+    /// @notice Room implementation contract address (for cloning)
     address public roomImplementation;
 
-    /// @notice Merkle Root 映射，epoch => root
+    /// @notice Merkle Root mapping, epoch => root
     mapping(uint256 => bytes32) public merkleRoots;
     
-    /// @notice 当前 epoch 版本号
+    /// @notice Current epoch version number
     uint256 public currentEpoch;
     
-    /// @notice 最后一次设置的 Merkle 元数据 URI
+    /// @notice Last set Merkle metadata URI
     string public lastMerkleURI;
 
-    /// @notice 用户是否为成员
+    /// @notice Whether user is a member
     mapping(address => bool) public isMember;
     
-    /// @notice 用户的资产档位
+    /// @notice User's asset tier
     mapping(address => uint256) public memberTier;
     
-    /// @notice 用户最后加入的 epoch
+    /// @notice Epoch when user last joined
     mapping(address => uint256) public lastJoinedEpoch;
 
-    /// @notice 所有创建的小群地址列表
+    /// @notice List of all created room addresses
     address[] public rooms;
 
-    /// @notice 大群成员总数
+    /// @notice Total number of large group members
     uint256 public membersCount;
 
-    /// @notice 所有成员地址列表
+    /// @notice List of all member addresses
     address[] public members;
 
-    /// @notice 是否已初始化（防止重复初始化）
+    /// @notice Whether initialized (prevents re-initialization)
     bool private _initialized;
     
-    /// @notice 已使用的 nonce，防止重放攻击（按用户划分作用域）
+    /// @notice Used nonces to prevent replay attacks (scoped by user)
     mapping(address => mapping(bytes32 => bool)) public usedNonces;
     
-    // ========== 新增：大群本体消息 ==========
+    // ========== New: Large group built-in messages ==========
     struct Message {
         address sender;
         uint40  ts;
-        uint8   kind;      // 0 明文, 1 密文
-        string  content;   // 明/密文（前端加密）
-        string  cid;       // 外部引用（可选）
+        uint8   kind;      // 0 plaintext, 1 ciphertext
+        string  content;   // Plain/ciphertext (encrypted by frontend)
+        string  cid;       // External reference (optional)
     }
     Message[] private _messages;
-    uint256 public seq;                   // 大群消息序号
-    bool    public plaintextEnabled;      // 是否允许明文（默认 true）
-    uint32  public communityMessageMaxBytes;  // 默认 2048
+    uint256 public seq;                   // Large group message sequence number
+    bool    public plaintextEnabled;      // Whether plaintext is allowed (default true)
+    uint32  public communityMessageMaxBytes;  // Default 2048
 
-    // ========== 新增：RSA 群聊公钥 ==========
-    string public rsaGroupPublicKey;      // 前端使用的群聊公钥（PEM/Base64等文本）
-    uint64 public groupKeyEpoch;          // 轮换版本
+    // ========== New: RSA group chat public key ==========
+    string public rsaGroupPublicKey;      // Group chat public key used by frontend (PEM/Base64 text)
+    uint64 public groupKeyEpoch;          // Rotation version
 
-    // ========== 新增：主题代币 & 唯一键 & 元数据 ==========
-    address public topicToken;            // 这个大群绑定的主题代币
+    // ========== New: Topic token & unique key & metadata ==========
+    address public topicToken;            // Topic token bound to this large group
     uint8   public maxTier;               // 1..7
-    string  public name_;                 // 群名称
-    string  public avatarCid;             // 头像 CID
+    string  public name_;                 // Group name
+    string  public avatarCid;             // Avatar CID
 
-    // ========== 新增：密钥分发信息 ==========
+    // ========== New: Key distribution information ==========
     struct KeyDistribution {
-        bytes32 merkleRoot;         // 成员地址和加密密钥的 Merkle Root
-        string ipfsCid;             // IPFS 文件 CID（存储完整的加密密钥数据）
-        uint64 distributionEpoch;   // 分发版本号
-        uint40 timestamp;           // 分发时间戳
+        bytes32 merkleRoot;         // Merkle Root of member addresses and encrypted keys
+        string ipfsCid;             // IPFS file CID (stores complete encrypted key data)
+        uint64 distributionEpoch;   // Distribution version number
+        uint40 timestamp;           // Distribution timestamp
     }
     
-    /// @notice 密钥分发记录：distributionEpoch => KeyDistribution
+    /// @notice Key distribution records: distributionEpoch => KeyDistribution
     mapping(uint64 => KeyDistribution) public keyDistributions;
     
-    /// @notice 当前密钥分发版本号
+    /// @notice Current key distribution version number
     uint64 public currentDistributionEpoch;
     
-    /// @notice 小群默认邀请费（大群群主设置）
+    /// @notice Default room invite fee (set by large group owner)
     uint256 public defaultInviteFee;
     
-    /// @notice 小群默认是否启用明文消息（大群群主设置）
+    /// @notice Default whether plaintext messages are enabled for rooms (set by large group owner)
     bool public defaultPlaintextEnabled;
     
-    /// @notice 消息最大字节数（固定为 2048）
+    /// @notice Maximum message bytes (fixed at 2048)
     uint32 public constant MESSAGE_MAX_BYTES = 2048;
 
-    /// @notice 红包合约引用（用于内联红包调用）
+    /// @notice Red packet contract reference (for inline red packet calls)
     IUniChatRedPacket public redPacket;
 
-    /* ===================== 构造函数 ===================== */
+    /* ===================== Constructor ===================== */
     /**
-     * @notice 构造函数（仅用于实现合约本体）
-     * @dev 满足 OpenZeppelin v5 要求：实现合约部署时把 owner 设为部署者
-     *      克隆实例会在 initialize() 中重新设置 owner
+     * @notice Constructor (only for implementation contract)
+     * @dev Satisfies OpenZeppelin v5 requirement: set owner to deployer when deploying implementation contract
+     *      Cloned instances will reset owner in initialize()
      */
     constructor() Ownable(msg.sender) {
-        // 锁死实现合约，防止被人对“实现合约本体”调用 initialize
+        // Lock implementation contract to prevent calling initialize on "implementation contract itself"
         _initialized = true;
     }
 
-    /* ===================== 修饰器 ===================== */
+    /* ===================== Modifiers ===================== */
     /**
-     * @notice 只有活跃成员才能调用
-     * @dev 检查调用者是否为成员且 epoch 版本是否匹配
+     * @notice Only active members can call
+     * @dev Checks if caller is a member and epoch version matches
      */
     modifier onlyActiveMember() {
         require(isMember[msg.sender] && lastJoinedEpoch[msg.sender] == currentEpoch, "NotActiveMember");
         _;
     }
 
-    /* ===================== 初始化函数（用于克隆实例） ===================== */
+    /* ===================== Initialization Function (for cloned instances) ===================== */
     /**
-     * @notice 初始化克隆的 Community 实例
-     * @dev 只能调用一次，设置群主和相关参数
+     * @notice Initialize cloned Community instance
+     * @dev Can only be called once, sets group owner and related parameters
      */
     function initialize(
         address communityOwner,
@@ -211,7 +211,7 @@ contract Community is Ownable, Pausable {
         uint256 _roomCreateFee,
         address _roomImplementation,
 
-        // 新增元数据
+        // New metadata
         address _topicToken,
         uint8   _maxTier,
         string calldata _name,
@@ -222,7 +222,7 @@ contract Community is Ownable, Pausable {
         require(_topicToken != address(0), "ZeroTopic");
         require(_maxTier >= 1 && _maxTier <= 7, "BadTier");
 
-        // 将克隆实例的 owner 设置为指定的群主
+        // Set cloned instance's owner to specified group owner
         _transferOwnership(communityOwner);
 
         UNICHAT = IERC20(unichatToken);
@@ -230,11 +230,11 @@ contract Community is Ownable, Pausable {
         roomCreateFee = _roomCreateFee;
         roomImplementation = _roomImplementation;
         
-        // 大群消息默认参数
+        // Large group message default parameters
         plaintextEnabled = true;
         communityMessageMaxBytes = 2048;
 
-        // 主题代币 & 元数据
+        // Topic token & metadata
         topicToken = _topicToken;
         maxTier    = _maxTier;
         name_      = _name;
@@ -242,18 +242,18 @@ contract Community is Ownable, Pausable {
 
         emit CommunityMetadataSet(_topicToken, _maxTier, _name, _avatarCid);
         
-        // 设置默认小群参数
-        defaultInviteFee = 0;  // 默认免费邀请
-        defaultPlaintextEnabled = true;  // 默认启用明文消息
+        // Set default room parameters
+        defaultInviteFee = 0;  // Default free invitation
+        defaultPlaintextEnabled = true;  // Default enable plaintext messages
 
         _initialized = true;
     }
 
-    /* ===================== Merkle Root 管理 ===================== */
+    /* ===================== Merkle Root Management ===================== */
     /**
-     * @notice 设置新的 Merkle Root
-     * @dev 只有群主可以调用，每次设置会自动增加 epoch 版本号
-     *      用于更新白名单，所有成员需要用新的 proof 重新加入
+     * @notice Set new Merkle Root
+     * @dev Only owner can call, each setting automatically increments epoch version number
+     *      Used to update whitelist, all members need to rejoin with new proof
      */
     function setMerkleRoot(bytes32 newRoot, string calldata uri) external onlyOwner whenNotPaused {
         require(newRoot != bytes32(0), "ZeroRoot");
@@ -264,9 +264,9 @@ contract Community is Ownable, Pausable {
     }
 
     /**
-     * @notice 检查用户是否有资格加入大群（只读函数）
-     * @dev 用于前端展示，不消耗 gas
-     *      验证 epoch、过期时间和 Merkle Proof 是否有效
+     * @notice Check if user is eligible to join large group (read-only function)
+     * @dev Used for frontend display, does not consume gas
+     *      Validates epoch, expiration time and Merkle Proof validity
      */
     function eligible(
         address account,
@@ -283,10 +283,10 @@ contract Community is Ownable, Pausable {
     }
 
     /**
-     * @notice 加入大群
-     * @dev 用户提交 Merkle Proof 证明自己在白名单中
-     *      验证通过后记录成员信息和资产档位
-     *      必须使用当前 epoch 的 proof，且不能过期
+     * @notice Join large group
+     * @dev User submits Merkle Proof to prove they are on whitelist
+     *      After verification, records member information and asset tier
+     *      Must use current epoch's proof and cannot be expired
      */
     function joinCommunity(
         uint256 _maxTier,
@@ -301,7 +301,7 @@ contract Community is Ownable, Pausable {
         bytes32 leaf = computeLeaf(address(this), epoch, msg.sender, _maxTier, validUntil, nonce);
         require(proof.verify(merkleRoots[epoch], leaf), "BadProof");
         
-        // 防止 nonce 重放攻击（按用户作用域）
+        // Prevent nonce replay attacks (scoped by user)
         require(!usedNonces[msg.sender][nonce], "NonceUsed");
         usedNonces[msg.sender][nonce] = true;
 
@@ -309,10 +309,10 @@ contract Community is Ownable, Pausable {
     }
 
     /**
-     * @notice 群主直接拉人加入大群（无需 Merkle Proof）
-     * @dev 只有群主可以调用，直接添加成员，无需验证默克尔树
-     * @param account 要添加的成员地址
-     * @param _maxTier 成员的资产档位（1-7）
+     * @notice Owner directly invites member to join large group (no Merkle Proof required)
+     * @dev Only owner can call, directly adds member without Merkle tree verification
+     * @param account Address of member to add
+     * @param _maxTier Member's asset tier (1-7)
      */
     function inviteMember(address account, uint256 _maxTier) external onlyOwner whenNotPaused {
         require(account != address(0), "ZeroAddr");
@@ -322,14 +322,14 @@ contract Community is Ownable, Pausable {
     }
 
     /**
-     * @notice 内部函数：添加成员
-     * @dev 统一处理成员添加逻辑，包括新成员计数和状态更新
-     * @param account 成员地址
-     * @param _maxTier 资产档位
-     * @param epoch 加入的 epoch
+     * @notice Internal function: add member
+     * @dev Unified member addition logic, including new member counting and state updates
+     * @param account Member address
+     * @param _maxTier Asset tier
+     * @param epoch Epoch when joined
      */
     function _addMember(address account, uint256 _maxTier, uint256 epoch) internal {
-        // 如果是新成员，添加到成员列表并增加计数
+        // If new member, add to member list and increment count
         bool isNewMember = !isMember[account];
         if (isNewMember) {
             members.push(account);
@@ -344,9 +344,9 @@ contract Community is Ownable, Pausable {
     }
 
     /**
-     * @notice 计算 Merkle Tree 叶子节点哈希
-     * @dev 公开函数，用于链下生成和链上验证 proof
-     *      叶子节点包含：群地址、epoch、用户地址、档位、过期时间、nonce
+     * @notice Calculate Merkle Tree leaf node hash
+     * @dev Public function for off-chain generation and on-chain verification of proof
+     *      Leaf node contains: group address, epoch, user address, tier, expiration time, nonce
      */
     function computeLeaf(
         address community,
@@ -360,21 +360,21 @@ contract Community is Ownable, Pausable {
     }
 
     /**
-     * @notice 检查用户是否为活跃成员
-     * @dev 用户必须已加入且 epoch 版本匹配
+     * @notice Check if user is an active member
+     * @dev User must have joined and epoch version matches
      */
     function isActiveMember(address account) external view returns (bool) {
         return isMember[account] && lastJoinedEpoch[account] == currentEpoch;
     }
 
     /**
-     * @notice 获取群聊基础元数据
-     * @return topicToken_ 主题代币地址
-     * @return maxTier_ 最大档位
-     * @return name 群名称
-     * @return avatar 头像 CID
-     * @return owner_ 群主地址
-     * @return epoch 当前 epoch 版本
+     * @notice Get group chat basic metadata
+     * @return topicToken_ Topic token address
+     * @return maxTier_ Maximum tier
+     * @return name Group name
+     * @return avatar Avatar CID
+     * @return owner_ Group owner address
+     * @return epoch Current epoch version
      */
     function getMetadata() external view returns (
         address topicToken_,
@@ -394,14 +394,14 @@ contract Community is Ownable, Pausable {
         );
     }
 
-    /* ===================== 大群内置消息 ===================== */
+    /* ===================== Large Group Built-in Messages ===================== */
     /**
-     * @notice 在大群中发送消息
-     * @dev 只有活跃成员可以调用
-     *      kind: 0=明文, 1=密文
+     * @notice Send message in large group
+     * @dev Only active members can call
+     *      kind: 0=plaintext, 1=ciphertext
      */
     function sendCommunityMessage(
-        uint8   kind,        // 0=明文,1=密文
+        uint8   kind,        // 0=plaintext, 1=ciphertext
         string calldata content,
         string calldata cid
     ) external onlyActiveMember whenNotPaused {
@@ -409,12 +409,12 @@ contract Community is Ownable, Pausable {
     }
 
     /**
-     * @notice 内部函数：发送大群消息
-     * @dev 抽取核心逻辑供 sendCommunityMessage 和 sendRedPacketMessage 复用
-     * @param from 消息发送者地址
-     * @param kind 消息类型：0=明文, 1=密文
-     * @param content 消息内容
-     * @param cid 外部引用（可选）
+     * @notice Internal function: send large group message
+     * @dev Extracts core logic for reuse by sendCommunityMessage and sendRedPacketMessage
+     * @param from Message sender address
+     * @param kind Message type: 0=plaintext, 1=ciphertext
+     * @param content Message content
+     * @param cid External reference (optional)
      */
     function _sendCommunityMessage(
         address from,
@@ -443,16 +443,16 @@ contract Community is Ownable, Pausable {
     }
 
     /**
-     * @notice 一笔交易完成：创建群红包 + 写入一条红包消息
-     * @dev 只有活跃成员可以调用，用户需提前 approve 代币给红包合约
-     * @param token 红包代币
-     * @param totalAmount 红包总金额
-     * @param totalShares 份数
-     * @param isRandom 是否随机红包
-     * @param shareAmounts 随机红包时的每份金额数组；非随机时传空数组
-     * @param expiryDuration 有效期秒数
-     * @param msgKind 消息 kind（0=明文,1=密文）
-     * @param memo 红包祝福语，显示在聊天记录里的 content
+     * @notice Complete in one transaction: create group red packet + write a red packet message
+     * @dev Only active members can call, user must approve tokens to red packet contract in advance
+     * @param token Red packet token
+     * @param totalAmount Total red packet amount
+     * @param totalShares Number of shares
+     * @param isRandom Whether random red packet
+     * @param shareAmounts Array of per-share amounts for random red packet; empty array for non-random
+     * @param expiryDuration Expiration duration in seconds
+     * @param msgKind Message kind (0=plaintext, 1=ciphertext)
+     * @param memo Red packet blessing message, displayed as content in chat history
      */
     function sendRedPacketMessage(
         address token,
@@ -466,37 +466,37 @@ contract Community is Ownable, Pausable {
     ) external onlyActiveMember whenNotPaused returns (uint256 packetId) {
         require(address(redPacket) != address(0), "RedPacket not set");
 
-        // 1. 调红包合约创建群红包（注意这里传 creator=msg.sender）
+        // 1. Call red packet contract to create group red packet (note: pass creator=msg.sender)
         packetId = redPacket.createGroupPacketFor(
             msg.sender,
             token,
             totalAmount,
             totalShares,
             isRandom,
-            address(this),   // 当前群合约
+            address(this),   // Current group contract
             shareAmounts,
             expiryDuration
         );
 
-        // 2. 把 packetId 编到 cid 里
+        // 2. Encode packetId into cid
         string memory cid = string.concat(
             "redpacket:v1:",
             Strings.toString(packetId)
         );
 
-        // 3. 调内部函数写一条群消息（sender=用户）
+        // 3. Call internal function to write a group message (sender=user)
         _sendCommunityMessage(msg.sender, msgKind, memo, cid);
     }
 
     /**
-     * @notice 获取大群消息总数
+     * @notice Get total number of large group messages
      */
     function communityMessageCount() external view returns (uint256) {
         return _messages.length;
     }
 
     /**
-     * @notice 获取指定索引的大群消息
+     * @notice Get large group message at specified index
      */
     function getCommunityMessage(uint256 index) external view returns (
         address sender, uint40 ts, uint8 kind, string memory content, string memory cid
@@ -506,9 +506,9 @@ contract Community is Ownable, Pausable {
     }
 
     /**
-     * @notice 分页获取大群消息
-     * @param start 起始索引
-     * @param count 获取数量
+     * @notice Get large group messages with pagination
+     * @param start Starting index
+     * @param count Number to retrieve
      */
     function getCommunityMessages(uint256 start, uint256 count) external view returns (Message[] memory) {
         uint256 total = _messages.length;
@@ -522,16 +522,16 @@ contract Community is Ownable, Pausable {
     }
 
     /**
-     * @notice 分页获取大群明文消息（仅返回 kind=0 的消息）
-     * @param start 起始索引（基于全部消息数组）
-     * @param count 最多获取数量
-     * @return 明文消息数组
+     * @notice Get large group plaintext messages with pagination (only returns messages with kind=0)
+     * @param start Starting index (based on all messages array)
+     * @param count Maximum number to retrieve
+     * @return Plaintext message array
      */
     function getPlaintextMessages(uint256 start, uint256 count) external view returns (Message[] memory) {
         uint256 total = _messages.length;
         if (start >= total) return new Message[](0);
 
-        // 第一遍：计算明文消息数量
+        // First pass: count plaintext messages
         uint256 plaintextCount = 0;
         uint256 scanned = 0;
         for (uint256 i = start; i < total && scanned < count; i++) {
@@ -541,7 +541,7 @@ contract Community is Ownable, Pausable {
             scanned++;
         }
 
-        // 第二遍：填充结果数组
+        // Second pass: fill result array
         Message[] memory out = new Message[](plaintextCount);
         uint256 outIndex = 0;
         scanned = 0;
@@ -557,16 +557,16 @@ contract Community is Ownable, Pausable {
     }
 
     /**
-     * @notice 分页获取大群密文消息（仅返回 kind=1 的消息）
-     * @param start 起始索引（基于全部消息数组）
-     * @param count 最多获取数量
-     * @return 密文消息数组
+     * @notice Get large group ciphertext messages with pagination (only returns messages with kind=1)
+     * @param start Starting index (based on all messages array)
+     * @param count Maximum number to retrieve
+     * @return Ciphertext message array
      */
     function getEncryptedMessages(uint256 start, uint256 count) external view returns (Message[] memory) {
         uint256 total = _messages.length;
         if (start >= total) return new Message[](0);
 
-        // 第一遍：计算密文消息数量
+        // First pass: count ciphertext messages
         uint256 encryptedCount = 0;
         uint256 scanned = 0;
         for (uint256 i = start; i < total && scanned < count; i++) {
@@ -576,7 +576,7 @@ contract Community is Ownable, Pausable {
             scanned++;
         }
 
-        // 第二遍：填充结果数组
+        // Second pass: fill result array
         Message[] memory out = new Message[](encryptedCount);
         uint256 outIndex = 0;
         scanned = 0;
@@ -592,28 +592,28 @@ contract Community is Ownable, Pausable {
     }
 
     /**
-     * @notice 设置大群是否允许明文消息
-     * @dev 只有群主可以调用
+     * @notice Set whether large group allows plaintext messages
+     * @dev Only owner can call
      */
     function setCommunityPlaintextEnabled(bool on) external onlyOwner { 
         plaintextEnabled = on; 
     }
 
     /**
-     * @notice 设置大群消息最大字节数
-     * @dev 只有群主可以调用
+     * @notice Set maximum bytes for large group messages
+     * @dev Only owner can call
      */
     function setCommunityMessageMaxBytes(uint32 n) external onlyOwner { 
         require(n > 0, "BadMax"); 
         communityMessageMaxBytes = n; 
     }
 
-    /* ===================== RSA 群聊公钥 ===================== */
+    /* ===================== RSA Group Chat Public Key ===================== */
     /**
-     * @notice 设置 RSA 群聊公钥
-     * @dev 只有群主可以调用，会自增 groupKeyEpoch
-     * @param newKey 新的 RSA 公钥（PEM 或 Base64 格式）
-     * @param metadataHash 元数据哈希
+     * @notice Set RSA group chat public key
+     * @dev Only owner can call, automatically increments groupKeyEpoch
+     * @param newKey New RSA public key (PEM or Base64 format)
+     * @param metadataHash Metadata hash
      */
     function setRsaGroupPublicKey(string calldata newKey, bytes32 metadataHash) external onlyOwner {
         rsaGroupPublicKey = newKey;
@@ -623,42 +623,42 @@ contract Community is Ownable, Pausable {
     }
 
     /**
-     * @notice 获取 RSA 群聊公钥
+     * @notice Get RSA group chat public key
      */
     function getRsaGroupPublicKey() external view returns (string memory) { 
         return rsaGroupPublicKey; 
     }
 
     /**
-     * @notice 获取群密钥 epoch 版本
+     * @notice Get group key epoch version
      */
     function getGroupKeyEpoch() external view returns (uint64) { 
         return groupKeyEpoch; 
     }
 
-    /* ===================== 小群管理 ===================== */
+    /* ===================== Room Management ===================== */
     /**
-     * @notice 创建小群
-     * @dev 只有活跃成员可以创建小群
-     *      需要支付固定创建费（默认 50 UNICHAT）
-     *      使用 EIP-1167 克隆模式创建 Room 实例
-     *      小群参数使用大群设置的默认值，消息限制固定为 2048 字节
+     * @notice Create room
+     * @dev Only active members can create rooms
+     *      Requires payment of fixed creation fee (default 50 UNICHAT)
+     *      Uses EIP-1167 clone pattern to create Room instances
+     *      Room parameters use default values set by large group, message limit fixed at 2048 bytes
      */
     function createRoom() external onlyActiveMember whenNotPaused returns (address room) {
-        // 从创建者扣除创建费并转入金库（使用 SafeERC20）
+        // Deduct creation fee from creator and transfer to treasury (using SafeERC20)
         UNICHAT.safeTransferFrom(msg.sender, treasury, roomCreateFee);
 
-        // 克隆 Room 实现合约
+        // Clone Room implementation contract
         room = Clones.clone(roomImplementation);
         
-        // 初始化克隆的 Room 实例，使用大群设置的默认参数
+        // Initialize cloned Room instance with default parameters set by large group
         IRoom(room).initialize(
             msg.sender,
             address(UNICHAT),
             address(this),
             defaultInviteFee,
             defaultPlaintextEnabled,
-            MESSAGE_MAX_BYTES  // 固定为 2048 字节
+            MESSAGE_MAX_BYTES  // Fixed at 2048 bytes
         );
 
         rooms.push(room);
@@ -666,10 +666,10 @@ contract Community is Ownable, Pausable {
     }
     
     /**
-     * @notice 设置小群默认参数
-     * @dev 只有大群群主可以调用，影响后续创建的所有小群
-     * @param _defaultInviteFee 默认邀请费用
-     * @param _defaultPlaintextEnabled 默认是否启用明文消息
+     * @notice Set default room parameters
+     * @dev Only large group owner can call, affects all subsequently created rooms
+     * @param _defaultInviteFee Default invite fee
+     * @param _defaultPlaintextEnabled Default whether plaintext messages are enabled
      */
     function setDefaultRoomParams(uint256 _defaultInviteFee, bool _defaultPlaintextEnabled) external onlyOwner {
         defaultInviteFee = _defaultInviteFee;
@@ -678,32 +678,32 @@ contract Community is Ownable, Pausable {
     }
 
     /**
-     * @notice 获取已创建的小群数量
+     * @notice Get number of created rooms
      */
     function roomsCount() external view returns (uint256) { return rooms.length; }
     
     /**
-     * @notice 批量获取小群地址列表
-     * @dev 分页查询，返回区间 [start, start+count) 的小群地址
-     * @param start 起始索引
-     * @param count 查询数量
+     * @notice Batch get room address list
+     * @dev Paginated query, returns room addresses in range [start, start+count)
+     * @param start Starting index
+     * @param count Query count
      */
     function getRooms(uint256 start, uint256 count) external view returns (address[] memory) {
         uint256 totalRooms = rooms.length;
         
-        // 如果起始位置超出范围，返回空数组
+        // If starting position out of range, return empty array
         if (start >= totalRooms) {
             return new address[](0);
         }
         
-        // 计算实际返回的数量
+        // Calculate actual return count
         uint256 end = start + count;
         if (end > totalRooms) {
             end = totalRooms;
         }
         uint256 actualCount = end - start;
         
-        // 创建返回数组并填充数据
+        // Create return array and fill data
         address[] memory result = new address[](actualCount);
         for (uint256 i = 0; i < actualCount; i++) {
             result[i] = rooms[start + i];
@@ -712,39 +712,39 @@ contract Community is Ownable, Pausable {
         return result;
     }
 
-    /* ===================== 成员查询 ===================== */
+    /* ===================== Member Queries ===================== */
     /**
-     * @notice 获取大群成员总数（包含所有历史成员）
-     * @return 成员总数
+     * @notice Get total number of large group members (includes all historical members)
+     * @return Total member count
      */
     function getMembersCount() external view returns (uint256) {
         return membersCount;
     }
 
     /**
-     * @notice 分页获取成员地址列表（包含所有历史成员）
-     * @dev 分页查询，返回区间 [start, start+count) 的成员地址
-     *      注意：此函数返回所有曾经加入过的成员，包括已不在当前 epoch 白名单中的成员
-     * @param start 起始索引
-     * @param count 查询数量
-     * @return 成员地址数组
+     * @notice Get member address list with pagination (includes all historical members)
+     * @dev Paginated query, returns member addresses in range [start, start+count)
+     *      Note: This function returns all members who have ever joined, including those no longer in current epoch whitelist
+     * @param start Starting index
+     * @param count Query count
+     * @return Member address array
      */
     function getMembers(uint256 start, uint256 count) external view returns (address[] memory) {
         uint256 totalMembers = members.length;
         
-        // 如果起始位置超出范围，返回空数组
+        // If starting position out of range, return empty array
         if (start >= totalMembers) {
             return new address[](0);
         }
         
-        // 计算实际返回的数量
+        // Calculate actual return count
         uint256 end = start + count;
         if (end > totalMembers) {
             end = totalMembers;
         }
         uint256 actualCount = end - start;
         
-        // 创建返回数组并填充数据
+        // Create return array and fill data
         address[] memory result = new address[](actualCount);
         for (uint256 i = 0; i < actualCount; i++) {
             result[i] = members[start + i];
@@ -754,9 +754,9 @@ contract Community is Ownable, Pausable {
     }
 
     /**
-     * @notice 获取当前活跃成员总数（仅统计当前 epoch 的成员）
-     * @dev 只统计 lastJoinedEpoch == currentEpoch 的成员
-     * @return 活跃成员总数
+     * @notice Get current active member count (only counts members in current epoch)
+     * @dev Only counts members where lastJoinedEpoch == currentEpoch
+     * @return Active member count
      */
     function getActiveMembersCount() external view returns (uint256) {
         uint256 count = 0;
@@ -770,15 +770,15 @@ contract Community is Ownable, Pausable {
     }
 
     /**
-     * @notice 分页获取当前活跃成员地址列表（仅当前 epoch 的成员）
-     * @dev 分页查询，只返回 lastJoinedEpoch == currentEpoch 的成员
-     *      此函数会遍历所有历史成员并过滤出活跃成员，可能消耗较多 gas
-     * @param start 起始索引（基于活跃成员列表）
-     * @param count 查询数量
-     * @return 活跃成员地址数组
+     * @notice Get current active member address list with pagination (only current epoch members)
+     * @dev Paginated query, only returns members where lastJoinedEpoch == currentEpoch
+     *      This function iterates through all historical members and filters active ones, may consume more gas
+     * @param start Starting index (based on active member list)
+     * @param count Query count
+     * @return Active member address array
      */
     function getActiveMembers(uint256 start, uint256 count) external view returns (address[] memory) {
-        // 第一遍：收集所有活跃成员地址
+        // First pass: collect all active member addresses
         address[] memory activeList = new address[](members.length);
         uint256 activeCount = 0;
         uint256 total = members.length;
@@ -791,19 +791,19 @@ contract Community is Ownable, Pausable {
             }
         }
         
-        // 如果起始位置超出范围，返回空数组
+        // If starting position out of range, return empty array
         if (start >= activeCount) {
             return new address[](0);
         }
         
-        // 计算实际返回的数量
+        // Calculate actual return count
         uint256 end = start + count;
         if (end > activeCount) {
             end = activeCount;
         }
         uint256 actualCount = end - start;
         
-        // 创建返回数组并填充数据
+        // Create return array and fill data
         address[] memory result = new address[](actualCount);
         for (uint256 i = 0; i < actualCount; i++) {
             result[i] = activeList[start + i];
@@ -812,27 +812,27 @@ contract Community is Ownable, Pausable {
         return result;
     }
 
-    /* ===================== 管理员函数 ===================== */
+    /* ===================== Admin Functions ===================== */
     /**
-     * @notice 暂停合约
-     * @dev 只有群主可以调用，暂停后禁止加入、创建小群等操作
+     * @notice Pause contract
+     * @dev Only owner can call, after pausing, joining and creating rooms are prohibited
      */
     function pause() external onlyOwner {
         _pause();
     }
 
     /**
-     * @notice 恢复合约
-     * @dev 只有群主可以调用
+     * @notice Unpause contract
+     * @dev Only owner can call
      */
     function unpause() external onlyOwner {
         _unpause();
     }
 
     /**
-     * @notice 转让大群群主
-     * @dev 只有当前群主可以调用，新群主不能为零地址
-     * @param newOwner 新群主地址
+     * @notice Transfer large group ownership
+     * @dev Only current owner can call, new owner cannot be zero address
+     * @param newOwner New owner address
      */
     function transferCommunityOwnership(address newOwner) external onlyOwner {
         require(newOwner != address(0), "ZeroAddr");
@@ -842,9 +842,9 @@ contract Community is Ownable, Pausable {
     }
 
     /**
-     * @notice 设置红包合约地址（只能设置一次）
-     * @dev 只有群主可以调用
-     * @param redPacket_ 红包合约地址
+     * @notice Set red packet contract address (can only be set once)
+     * @dev Only owner can call
+     * @param redPacket_ Red packet contract address
      */
     function setRedPacket(address redPacket_) external onlyOwner {
         require(address(redPacket) == address(0), "already set");
@@ -852,18 +852,18 @@ contract Community is Ownable, Pausable {
         redPacket = IUniChatRedPacket(redPacket_);
     }
 
-    /* ===================== 密钥分发功能 ===================== */
+    /* ===================== Key Distribution Functions ===================== */
     /**
-     * @notice 群主分发群密钥
-     * @dev 只有群主可以调用
-     *      前端流程：
-     *      1. 调用 getActiveMembers 获取所有活跃成员地址
-     *      2. 为每个成员使用其公钥加密群密钥
-     *      3. 使用 merkletreejs 构建 Merkle Tree（叶子节点：keccak256(address, encryptedKey)）
-     *      4. 将完整的加密密钥文件上传到 IPFS
-     *      5. 调用此函数，传入 Merkle Root 和 IPFS CID
-     * @param merkleRoot 成员地址和加密密钥的 Merkle Root
-     * @param ipfsCid IPFS 文件 CID（存储所有成员的加密密钥）
+     * @notice Owner distributes group key
+     * @dev Only owner can call
+     *      Frontend flow:
+     *      1. Call getActiveMembers to get all active member addresses
+     *      2. Encrypt group key for each member using their public key
+     *      3. Build Merkle Tree using merkletreejs (leaf node: keccak256(address, encryptedKey))
+     *      4. Upload complete encrypted key file to IPFS
+     *      5. Call this function, pass Merkle Root and IPFS CID
+     * @param merkleRoot Merkle Root of member addresses and encrypted keys
+     * @param ipfsCid IPFS file CID (stores encrypted keys for all members)
      */
     function distributeGroupKey(bytes32 merkleRoot, string calldata ipfsCid) external onlyOwner whenNotPaused {
         require(merkleRoot != bytes32(0), "ZeroRoot");
@@ -882,12 +882,12 @@ contract Community is Ownable, Pausable {
     }
 
     /**
-     * @notice 获取指定版本的密钥分发信息
-     * @param distributionEpoch 分发版本号
+     * @notice Get key distribution information for specified version
+     * @param distributionEpoch Distribution version number
      * @return merkleRoot Merkle Root
      * @return ipfsCid IPFS CID
-     * @return epoch 分发版本号
-     * @return timestamp 分发时间戳
+     * @return epoch Distribution version number
+     * @return timestamp Distribution timestamp
      */
     function getKeyDistribution(uint64 distributionEpoch) external view returns (
         bytes32 merkleRoot,
@@ -900,11 +900,11 @@ contract Community is Ownable, Pausable {
     }
 
     /**
-     * @notice 获取最新的密钥分发信息
+     * @notice Get latest key distribution information
      * @return merkleRoot Merkle Root
      * @return ipfsCid IPFS CID
-     * @return epoch 分发版本号
-     * @return timestamp 分发时间戳
+     * @return epoch Distribution version number
+     * @return timestamp Distribution timestamp
      */
     function getLatestKeyDistribution() external view returns (
         bytes32 merkleRoot,
@@ -920,13 +920,13 @@ contract Community is Ownable, Pausable {
     }
 
     /**
-     * @notice 验证用户的加密密钥是否在 Merkle Tree 中
-     * @dev 前端使用：用户下载 IPFS 文件，提取自己的加密密钥，验证是否在 Merkle Tree 中
-     * @param distributionEpoch 分发版本号
-     * @param account 用户地址
-     * @param encryptedKey 加密后的群密钥（前端从 IPFS 获取）
+     * @notice Verify if user's encrypted key is in Merkle Tree
+     * @dev For frontend use: user downloads IPFS file, extracts their encrypted key, verifies if in Merkle Tree
+     * @param distributionEpoch Distribution version number
+     * @param account User address
+     * @param encryptedKey Encrypted group key (frontend gets from IPFS)
      * @param proof Merkle Proof
-     * @return 是否验证通过
+     * @return Whether verification passed
      */
     function verifyEncryptedKey(
         uint64 distributionEpoch,

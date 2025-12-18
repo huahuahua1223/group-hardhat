@@ -7,21 +7,21 @@ import {Clones} from "@openzeppelin/contracts/proxy/Clones.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 /**
- * @notice Community 合约初始化接口
+ * @notice Community contract initialization interface
  */
 interface ICommunity {
     function initialize(
         address communityOwner,
-        address feeToken,            // 用于支付房间创建费的代币（UNICHAT）
+        address feeToken,            // Token used to pay room creation fee (UNICHAT)
         address treasury,
         uint256 roomCreateFee,
         address roomImplementation,
 
-        // === 新增：主题代币 & 唯一键 & 元数据 ===
-        address topicToken,          // 这个大群绑定的"主题代币"
+        // === New: Topic token & unique key & metadata ===
+        address topicToken,          // "Topic token" bound to this large group
         uint8   maxTier,             // 1..7
-        string calldata name_,       // 群名称
-        string calldata avatarCid_   // 头像CID
+        string calldata name_,       // Group name
+        string calldata avatarCid_   // Avatar CID
     ) external;
 
     function eligible(
@@ -43,66 +43,66 @@ interface ICommunity {
 
 /**
  * @title CommunityFactory
- * @notice 创建大群（Community）并保证 (topicToken, maxTier) 全局唯一
- * @dev 使用 EIP-1167 最小代理模式克隆 Community 实例，节省部署 gas
+ * @notice Creates large groups (Community) and ensures (topicToken, maxTier) is globally unique
+ * @dev Uses EIP-1167 minimal proxy pattern to clone Community instances, saving deployment gas
  */
 contract CommunityFactory is Ownable, Pausable {
-    /* ===================== 结构体 ===================== */
+    /* ===================== Structs ===================== */
     /**
-     * @notice 群聊元数据结构体
+     * @notice Group chat metadata struct
      */
     struct CommunityMetadata {
-        address communityAddress;   // 群聊合约地址
-        address owner;              // 群主地址
-        address topicToken;         // 主题代币地址
-        uint8 maxTier;              // 最大档位 (1-7)
-        string name;                // 群名称
-        string avatarCid;           // 头像 CID
-        uint256 currentEpoch;       // 当前 epoch 版本
+        address communityAddress;   // Group chat contract address
+        address owner;              // Group owner address
+        address topicToken;         // Topic token address
+        uint8 maxTier;              // Maximum tier (1-7)
+        string name;                // Group name
+        string avatarCid;           // Avatar CID
+        uint256 currentEpoch;       // Current epoch version
     }
 
-    /* ===================== 事件 ===================== */
-    /// @notice 当创建新的大群时触发
+    /* ===================== Events ===================== */
+    /// @notice Emitted when a new large group is created
     event CommunityCreated(address indexed community, address indexed owner, address indexed topicToken, uint8 maxTier);
     
-    /// @notice 当更新实现合约地址时触发
+    /// @notice Emitted when implementation contract addresses are updated
     event ImplementationsUpdated(address communityImpl, address roomImpl);
     
-    /// @notice 当更新小群创建费时触发
+    /// @notice Emitted when room creation fee is updated
     event RoomCreateFeeUpdated(uint256 newFee);
     
-    /// @notice 当更新金库地址时触发
+    /// @notice Emitted when treasury address is updated
     event TreasuryUpdated(address newTreasury);
 
-    /* ===================== 状态变量 ===================== */
-    /// @notice 费用代币合约地址（不可变）
+    /* ===================== State Variables ===================== */
+    /// @notice Fee token contract address (immutable)
     IERC20 public immutable UNICHAT;
     
-    /// @notice 费用接收金库地址
+    /// @notice Fee receiving treasury address
     address public treasury;
     
-    /// @notice 小群固定创建费（单位：wei，例如 50e18）
+    /// @notice Fixed room creation fee (unit: wei, e.g. 50e18)
     uint256 public roomCreateFee;
 
-    /// @notice Community 实现合约地址（用于克隆）
+    /// @notice Community implementation contract address (for cloning)
     address public communityImplementation;
     
-    /// @notice Room 实现合约地址（用于克隆）
+    /// @notice Room implementation contract address (for cloning)
     address public roomImplementation;
 
-    /// @notice (topicToken, maxTier) -> Community 地址，保证唯一
+    /// @notice (topicToken, maxTier) -> Community address, ensures uniqueness
     mapping(bytes32 => address) private _communityByTokenTier;
 
-    /// @notice 所有创建的 Community 地址列表
+    /// @notice List of all created Community addresses
     address[] private _allCommunities;
 
-    /// @notice 按主题代币分类存储的 Community 地址
+    /// @notice Community addresses stored by topic token category
     mapping(address => address[]) private _communitiesByTopic;
 
-    /* ===================== 构造函数 ===================== */
+    /* ===================== Constructor ===================== */
     /**
-     * @notice 构造函数，初始化工厂合约
-     * @dev 设置部署者为合约 owner，初始化全局参数
+     * @notice Constructor, initializes factory contract
+     * @dev Sets deployer as contract owner, initializes global parameters
      */
     constructor(
         address unichatToken,
@@ -111,7 +111,7 @@ contract CommunityFactory is Ownable, Pausable {
         address _communityImpl,
         address _roomImpl
     ) Ownable(msg.sender) {
-        // 验证关键地址不为零地址
+        // Verify critical addresses are not zero address
         require(unichatToken != address(0) && _treasury != address(0), "ZeroAddr");
         require(_communityImpl != address(0) && _roomImpl != address(0), "ImplNotSet");
         
@@ -122,10 +122,10 @@ contract CommunityFactory is Ownable, Pausable {
         roomImplementation = _roomImpl;
     }
 
-    /* ===================== 管理员函数 ===================== */
+    /* ===================== Admin Functions ===================== */
     /**
-     * @notice 更新实现合约地址
-     * @dev 只有 owner 可以调用，用于升级实现合约逻辑
+     * @notice Update implementation contract addresses
+     * @dev Only owner can call, used to upgrade implementation contract logic
      */
     function setImplementations(address _communityImpl, address _roomImpl) external onlyOwner {
         require(_communityImpl != address(0) && _roomImpl != address(0), "ZeroAddr");
@@ -135,8 +135,8 @@ contract CommunityFactory is Ownable, Pausable {
     }
 
     /**
-     * @notice 更新小群创建费
-     * @dev 只有 owner 可以调用
+     * @notice Update room creation fee
+     * @dev Only owner can call
      */
     function setRoomCreateFee(uint256 newFee) external onlyOwner {
         roomCreateFee = newFee;
@@ -144,8 +144,8 @@ contract CommunityFactory is Ownable, Pausable {
     }
 
     /**
-     * @notice 更新金库地址
-     * @dev 只有 owner 可以调用，新地址不能为零地址
+     * @notice Update treasury address
+     * @dev Only owner can call, new address cannot be zero address
      */
     function setTreasury(address newTreasury) external onlyOwner {
         require(newTreasury != address(0), "ZeroAddr");
@@ -153,44 +153,44 @@ contract CommunityFactory is Ownable, Pausable {
         emit TreasuryUpdated(newTreasury);
     }
 
-    /* ===================== 读取 ===================== */
+    /* ===================== Read Functions ===================== */
     /**
-     * @notice 根据 (topicToken, maxTier) 查询对应的 Community 地址
-     * @dev 如果返回零地址，说明该组合尚未创建
+     * @notice Query corresponding Community address by (topicToken, maxTier)
+     * @dev If zero address is returned, the combination has not been created yet
      */
     function getCommunityByTokenTier(address topicToken, uint8 maxTier) external view returns (address) {
         return _communityByTokenTier[_key(topicToken, maxTier)];
     }
 
     /**
-     * @notice 获取所有群聊总数
+     * @notice Get total number of all group chats
      */
     function getAllCommunitiesCount() external view returns (uint256) {
         return _allCommunities.length;
     }
 
     /**
-     * @notice 分页获取群聊列表
-     * @param start 起始索引
-     * @param count 获取数量
-     * @return 群聊地址数组
+     * @notice Get group chat list with pagination
+     * @param start Starting index
+     * @param count Number to retrieve
+     * @return Group chat address array
      */
     function getCommunities(uint256 start, uint256 count) external view returns (address[] memory) {
         uint256 total = _allCommunities.length;
         
-        // 如果起始位置超出范围，返回空数组
+        // If starting position out of range, return empty array
         if (start >= total) {
             return new address[](0);
         }
         
-        // 计算实际返回的数量
+        // Calculate actual return count
         uint256 end = start + count;
         if (end > total) {
             end = total;
         }
         uint256 actualCount = end - start;
         
-        // 创建返回数组并填充数据
+        // Create return array and fill data
         address[] memory result = new address[](actualCount);
         for (uint256 i = 0; i < actualCount; i++) {
             result[i] = _allCommunities[start + i];
@@ -200,20 +200,20 @@ contract CommunityFactory is Ownable, Pausable {
     }
 
     /**
-     * @notice 获取指定主题代币的所有群聊
-     * @param topicToken 主题代币地址
-     * @return 群聊地址数组
+     * @notice Get all group chats for specified topic token
+     * @param topicToken Topic token address
+     * @return Group chat address array
      */
     function getCommunitiesByTopic(address topicToken) external view returns (address[] memory) {
         return _communitiesByTopic[topicToken];
     }
 
     /**
-     * @notice 分页获取指定主题代币的群聊
-     * @param topicToken 主题代币地址
-     * @param start 起始索引
-     * @param count 获取数量
-     * @return 群聊地址数组
+     * @notice Get group chats for specified topic token with pagination
+     * @param topicToken Topic token address
+     * @param start Starting index
+     * @param count Number to retrieve
+     * @return Group chat address array
      */
     function getCommunitiesByTopicPaginated(
         address topicToken, 
@@ -223,19 +223,19 @@ contract CommunityFactory is Ownable, Pausable {
         address[] storage communities = _communitiesByTopic[topicToken];
         uint256 total = communities.length;
         
-        // 如果起始位置超出范围，返回空数组
+        // If starting position out of range, return empty array
         if (start >= total) {
             return new address[](0);
         }
         
-        // 计算实际返回的数量
+        // Calculate actual return count
         uint256 end = start + count;
         if (end > total) {
             end = total;
         }
         uint256 actualCount = end - start;
         
-        // 创建返回数组并填充数据
+        // Create return array and fill data
         address[] memory result = new address[](actualCount);
         for (uint256 i = 0; i < actualCount; i++) {
             result[i] = communities[start + i];
@@ -245,15 +245,15 @@ contract CommunityFactory is Ownable, Pausable {
     }
 
     /**
-     * @notice 批量检查用户是否有资格加入指定的多个群聊
-     * @param user 用户地址
-     * @param communities 群聊地址数组
-     * @param tiers 对应的档位数组
-     * @param epochs 对应的 epoch 数组
-     * @param validUntils 对应的过期时间数组
-     * @param nonces 对应的 nonce 数组
-     * @param proofs 对应的 Merkle Proof 数组
-     * @return 布尔数组，表示每个群聊的资格状态
+     * @notice Batch check if user is eligible to join specified multiple group chats
+     * @param user User address
+     * @param communities Group chat address array
+     * @param tiers Corresponding tier array
+     * @param epochs Corresponding epoch array
+     * @param validUntils Corresponding expiration time array
+     * @param nonces Corresponding nonce array
+     * @param proofs Corresponding Merkle Proof array
+     * @return Boolean array indicating eligibility status for each group chat
      */
     function batchCheckEligibility(
         address user,
@@ -295,9 +295,9 @@ contract CommunityFactory is Ownable, Pausable {
     }
 
     /**
-     * @notice 批量获取多个群聊的完整元数据
-     * @param communities 群聊地址数组
-     * @return 元数据数组
+     * @notice Batch get complete metadata for multiple group chats
+     * @param communities Group chat address array
+     * @return Metadata array
      */
     function batchGetCommunityMetadata(address[] calldata communities) 
         external view returns (CommunityMetadata[] memory) 
@@ -313,12 +313,12 @@ contract CommunityFactory is Ownable, Pausable {
     }
 
     /**
-     * @notice 获取单个群聊的元数据（内部函数）
-     * @param community 群聊地址
-     * @return 元数据结构体
+     * @notice Get single group chat metadata (internal function)
+     * @param community Group chat address
+     * @return Metadata struct
      */
     function _getCommunityMetadata(address community) internal view returns (CommunityMetadata memory) {
-        // 使用单个 try-catch 来避免嵌套
+        // Use single try-catch to avoid nesting
         try this.getCommunityMetadataExternal(community) returns (CommunityMetadata memory result) {
             return result;
         } catch {
@@ -327,9 +327,9 @@ contract CommunityFactory is Ownable, Pausable {
     }
 
     /**
-     * @notice 外部可调用的元数据获取函数（用于内部 try-catch）
-     * @param community 群聊地址
-     * @return 元数据结构体
+     * @notice Externally callable metadata retrieval function (for internal try-catch)
+     * @param community Group chat address
+     * @return Metadata struct
      */
     function getCommunityMetadataExternal(address community) external view returns (CommunityMetadata memory) {
         return CommunityMetadata({
@@ -343,12 +343,12 @@ contract CommunityFactory is Ownable, Pausable {
         });
     }
 
-    /* ===================== 核心函数 ===================== */
+    /* ===================== Core Functions ===================== */
     /**
-     * @notice 创建新的大群（唯一键：topicToken + maxTier）
-     * @dev 仅系统管理员可创建大群，并指定大群群主
-     *      使用 EIP-1167 克隆模式创建 Community 实例
-     *      保证 (topicToken, maxTier) 全局唯一
+     * @notice Create new large group (unique key: topicToken + maxTier)
+     * @dev Only system admin can create large groups and specify large group owner
+     *      Uses EIP-1167 clone pattern to create Community instances
+     *      Ensures (topicToken, maxTier) is globally unique
      */
     function createCommunity(
         address communityOwner,
@@ -364,10 +364,10 @@ contract CommunityFactory is Ownable, Pausable {
         bytes32 k = _key(topicToken, maxTier);
         require(_communityByTokenTier[k] == address(0), "CommunityExists");
 
-        // 使用最小代理模式克隆 Community 合约
+        // Use minimal proxy pattern to clone Community contract
         community = Clones.clone(communityImplementation);
         
-        // 初始化克隆的 Community 实例
+        // Initialize cloned Community instance
         ICommunity(community).initialize(
             communityOwner,
             address(UNICHAT),
@@ -382,25 +382,25 @@ contract CommunityFactory is Ownable, Pausable {
 
         _communityByTokenTier[k] = community;
         
-        // 添加到全局列表和主题代币分类列表
+        // Add to global list and topic token category list
         _allCommunities.push(community);
         _communitiesByTopic[topicToken].push(community);
         
         emit CommunityCreated(community, communityOwner, topicToken, maxTier);
     }
 
-    /* ===================== 内部函数 ===================== */
+    /* ===================== Internal Functions ===================== */
     /**
-     * @notice 计算 (topicToken, maxTier) 的唯一键
+     * @notice Calculate unique key for (topicToken, maxTier)
      */
     function _key(address token, uint8 tier) internal pure returns (bytes32) {
         return keccak256(abi.encodePacked(token, tier));
     }
 
     /**
-     * @notice 获取默认元数据（当查询失败时使用）
-     * @param community 群聊地址
-     * @return 默认元数据结构体
+     * @notice Get default metadata (used when query fails)
+     * @param community Group chat address
+     * @return Default metadata struct
      */
     function _getDefaultMetadata(address community) internal pure returns (CommunityMetadata memory) {
         return CommunityMetadata({
@@ -414,18 +414,18 @@ contract CommunityFactory is Ownable, Pausable {
         });
     }
 
-    /* ===================== 暂停 ===================== */
+    /* ===================== Pause ===================== */
     /**
-     * @notice 暂停工厂合约
-     * @dev 只有系统管理员可以调用，暂停后禁止创建新的大群
+     * @notice Pause factory contract
+     * @dev Only system admin can call, after pausing, creating new large groups is prohibited
      */
     function pause() external onlyOwner {
         _pause();
     }
 
     /**
-     * @notice 恢复工厂合约
-     * @dev 只有系统管理员可以调用
+     * @notice Unpause factory contract
+     * @dev Only system admin can call
      */
     function unpause() external onlyOwner {
         _unpause();

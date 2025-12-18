@@ -7,7 +7,7 @@ import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol
 import {Pausable} from "@openzeppelin/contracts/utils/Pausable.sol";
 
 /**
- * @notice Community 只读接口，用于验证成员资格
+ * @notice Community read-only interface for verifying membership
  */
 interface ICommunityReadonly {
     function isActiveMember(address account) external view returns (bool);
@@ -15,124 +15,124 @@ interface ICommunityReadonly {
 
 /**
  * @title Room
- * @notice 小群合约，支持自定义邀请费和消息管理
- * @dev 群主可自定义邀请费；任何群成员可发送消息
- *      消息同时存储在事件和状态中，支持明文和密文
- *      Room 功能保持不变，完全兼容新的 Community 接口
+ * @notice Room contract supporting custom invite fees and message management
+ * @dev Owner can customize invite fee; any room member can send messages
+ *      Messages are stored in both events and state, supporting plaintext and ciphertext
+ *      Room functionality remains unchanged, fully compatible with new Community interface
  */
 contract Room is Pausable {
     using SafeERC20 for IERC20;
 
-    /* ===================== 事件 ===================== */
-    /// @notice 当更新邀请费时触发
+    /* ===================== Events ===================== */
+    /// @notice Emitted when invite fee is updated
     event InviteFeeUpdated(uint256 fee);
     
-    /// @notice 当更新费用接收人时触发
+    /// @notice Emitted when fee recipient is updated
     event FeeRecipientUpdated(address recipient);
     
-    /// @notice 当邀请新成员时触发
+    /// @notice Emitted when a new member is invited
     event Invited(address indexed user, address indexed inviter, uint256 fee);
     
-    /// @notice 当成员加入时触发
+    /// @notice Emitted when a member joins
     event Joined(address indexed user);
     
-    /// @notice 当成员被踢出时触发
+    /// @notice Emitted when a member is kicked
     event Kicked(address indexed user, address indexed by);
     
-    /// @notice 当成员主动离开时触发
+    /// @notice Emitted when a member leaves voluntarily
     event Left(address indexed user);
 
-    /// @notice 当群密钥 epoch 增加时触发（成员变更时）
+    /// @notice Emitted when group key epoch increases (when members change)
     event GroupKeyEpochIncreased(uint64 epoch, bytes32 metadataHash);
     
-    /// @notice 当转让小群群主时触发
+    /// @notice Emitted when room ownership is transferred
     event RoomOwnershipTransferred(address indexed previousOwner, address indexed newOwner);
 
-    /// @notice 当广播消息时触发
+    /// @notice Emitted when message is broadcast
     event MessageBroadcasted(
         address indexed room,
         address indexed sender,
-        uint8 kind,                // 0: 明文, 1: 密文
+        uint8 kind,                // 0: plaintext, 1: ciphertext
         uint256 indexed seq,
         bytes32 contentHash,
         string cid,
         uint40 ts
     );
 
-    /* ===================== 状态变量 ===================== */
-    /// @notice 费用代币合约地址
+    /* ===================== State Variables ===================== */
+    /// @notice Fee token contract address
     IERC20 public UNICHAT;
     
-    /// @notice 所属大群合约地址
+    /// @notice Parent large group contract address
     ICommunityReadonly public COMMUNITY;
 
-    /// @notice 小群群主地址
+    /// @notice Room owner address
     address public owner;
     
-    /// @notice 邀请费接收人地址
+    /// @notice Invite fee recipient address
     address public feeRecipient;
 
-    /// @notice 邀请新成员所需费用
+    /// @notice Fee required to invite new member
     uint256 public inviteFee;
     
-    /// @notice 是否启用明文消息（默认 true）
+    /// @notice Whether plaintext messages are enabled (default true)
     bool public plaintextEnabled;
     
-    /// @notice 消息最大字节数（默认 1024）
+    /// @notice Maximum message bytes (default 1024)
     uint32 public messageMaxBytes;
 
-    /// @notice 群密钥 epoch 版本号（成员变更时自增）
+    /// @notice Group key epoch version number (auto-increments when members change)
     uint64 public groupKeyEpoch;
     
-    /// @notice 消息序号
+    /// @notice Message sequence number
     uint256 public seq;
 
-    /// @notice 用户是否为小群成员
+    /// @notice Whether user is a room member
     mapping(address => bool) public isMember;
     
-    /// @notice 小群成员总数
+    /// @notice Total number of room members
     uint256 public membersCount;
 
     /**
-     * @notice 消息结构体
+     * @notice Message struct
      */
     struct Message {
-        address sender;    // 发送者地址
-        uint40 ts;         // 时间戳
-        uint8 kind;        // 消息类型：0 明文, 1 密文
-        string content;    // 消息内容（字符串形式，小于等于 messageMaxBytes）
-        string cid;        // 可选（IPFS CID 或外部引用）
+        address sender;    // Sender address
+        uint40 ts;         // Timestamp
+        uint8 kind;        // Message type: 0 plaintext, 1 ciphertext
+        string content;    // Message content (string form, less than or equal to messageMaxBytes)
+        string cid;        // Optional (IPFS CID or external reference)
     }
     
-    /// @notice 消息存储数组
+    /// @notice Message storage array
     Message[] private _messages;
 
-    /// @notice 是否已初始化
+    /// @notice Whether initialized
     bool private _initialized;
 
-    /* ===================== 修饰器 ===================== */
-    /// @notice 只有群主可以调用
+    /* ===================== Modifiers ===================== */
+    /// @notice Only owner can call
     modifier onlyOwner() { require(msg.sender == owner, "NotOwner"); _; }
     
-    /// @notice 只有成员可以调用
+    /// @notice Only members can call
     modifier onlyMember() { require(isMember[msg.sender], "NotMember"); _; }
 
-    /* ===================== 构造函数 ===================== */
+    /* ===================== Constructor ===================== */
     /**
-     * @notice 构造函数，锁死实现合约
-     * @dev 防止有人对实现合约本体调用 initialize
-     *      只有通过克隆创建的实例才能正常初始化
+     * @notice Constructor, locks implementation contract
+     * @dev Prevents calling initialize on implementation contract itself
+     *      Only instances created through cloning can be properly initialized
      */
     constructor() {
-        // 锁死实现合约，防止被人对"实现合约本体"调用 initialize
+        // Lock implementation contract to prevent calling initialize on "implementation contract itself"
         _initialized = true;
     }
 
-    /* ===================== 初始化函数（用于克隆实例） ===================== */
+    /* ===================== Initialization Function (for cloned instances) ===================== */
     /**
-     * @notice 初始化克隆的 Room 实例
-     * @dev 只能调用一次，设置群主和相关参数
-     *      创建者自动成为第一个成员
+     * @notice Initialize cloned Room instance
+     * @dev Can only be called once, sets owner and related parameters
+     *      Creator automatically becomes first member
      */
     function initialize(
         address _owner,
@@ -154,7 +154,7 @@ contract Room is Pausable {
         plaintextEnabled = _plaintextEnabled;
         messageMaxBytes = _messageMaxBytes == 0 ? 1024 : _messageMaxBytes;
 
-        // 创建者自动入群
+        // Creator automatically joins room
         isMember[_owner] = true;
         membersCount = 1;
         emit Joined(_owner);
@@ -162,10 +162,10 @@ contract Room is Pausable {
         _initialized = true;
     }
 
-    /* ===================== 管理员函数 ===================== */
+    /* ===================== Admin Functions ===================== */
     /**
-     * @notice 设置邀请费
-     * @dev 只有群主可以调用
+     * @notice Set invite fee
+     * @dev Only owner can call
      */
     function setInviteFee(uint256 newFee) external onlyOwner {
         inviteFee = newFee;
@@ -173,8 +173,8 @@ contract Room is Pausable {
     }
 
     /**
-     * @notice 设置费用接收人
-     * @dev 只有群主可以调用，新地址不能为零地址
+     * @notice Set fee recipient
+     * @dev Only owner can call, new address cannot be zero address
      */
     function setFeeRecipient(address recipient) external onlyOwner {
         require(recipient != address(0), "ZeroAddr");
@@ -183,16 +183,16 @@ contract Room is Pausable {
     }
 
     /**
-     * @notice 设置是否启用明文消息
-     * @dev 只有群主可以调用
+     * @notice Set whether plaintext messages are enabled
+     * @dev Only owner can call
      */
     function setPlaintextEnabled(bool on) external onlyOwner {
         plaintextEnabled = on;
     }
 
     /**
-     * @notice 设置消息最大字节数
-     * @dev 只有群主可以调用，必须大于 0
+     * @notice Set maximum message bytes
+     * @dev Only owner can call, must be greater than 0
      */
     function setMessageMaxBytes(uint32 n) external onlyOwner {
         require(n > 0, "BadMax");
@@ -200,21 +200,21 @@ contract Room is Pausable {
     }
 
     /**
-     * @notice 手动轮换群密钥
-     * @dev 只有群主可以调用，配合链下密钥分发使用
-     *      通常在成员变更后调用，更新群密钥 epoch
+     * @notice Manually rotate group key
+     * @dev Only owner can call, used with off-chain key distribution
+     *      Usually called after member changes to update group key epoch
      */
     function rotateEpoch(bytes32 metadataHash) external onlyOwner {
         groupKeyEpoch += 1;
         emit GroupKeyEpochIncreased(groupKeyEpoch, metadataHash);
     }
 
-    /* ===================== 成员管理 ===================== */
+    /* ===================== Member Management ===================== */
     /**
-     * @notice 邀请新成员加入小群
-     * @dev 被邀请人必须是大群的活跃成员
-     *      邀请人需要支付邀请费（如果设置了费用）
-     *      成员变更会自动增加群密钥 epoch
+     * @notice Invite new member to join room
+     * @dev Invited person must be an active member of the large group
+     *      Inviter needs to pay invite fee (if fee is set)
+     *      Member changes automatically increment group key epoch
      */
     function invite(address user) external whenNotPaused {
         require(user != address(0), "ZeroAddr");
@@ -236,10 +236,10 @@ contract Room is Pausable {
     }
 
     /**
-     * @notice 使用 EIP-2612 Permit 邀请新成员
-     * @dev 使用链下签名授权，一笔交易完成授权和邀请
-     *      被邀请人必须是大群的活跃成员
-     *      适用于支持 Permit 的代币（如 UNICHAT）
+     * @notice Invite new member using EIP-2612 Permit
+     * @dev Uses off-chain signature authorization, completes authorization and invitation in one transaction
+     *      Invited person must be an active member of the large group
+     *      Applicable to tokens supporting Permit (such as UNICHAT)
      */
     function inviteWithPermit(
         address user,
@@ -268,10 +268,10 @@ contract Room is Pausable {
     }
 
     /**
-     * @notice 踢出成员
-     * @dev 只有群主可以调用
-     *      成员变更会自动增加群密钥 epoch
-     *      群主不能踢出自己
+     * @notice Kick member
+     * @dev Only owner can call
+     *      Member changes automatically increment group key epoch
+     *      Owner cannot kick themselves
      */
     function kick(address user) external onlyOwner whenNotPaused {
         require(user != owner, "CannotKickOwner");
@@ -284,9 +284,9 @@ contract Room is Pausable {
     }
 
     /**
-     * @notice 主动离开小群
-     * @dev 任何成员都可以调用
-     *      成员变更会自动增加群密钥 epoch
+     * @notice Leave room voluntarily
+     * @dev Any member can call
+     *      Member changes automatically increment group key epoch
      */
     function leave() external onlyMember whenNotPaused {
         isMember[msg.sender] = false;
@@ -296,35 +296,35 @@ contract Room is Pausable {
         emit GroupKeyEpochIncreased(groupKeyEpoch, bytes32(0));
     }
 
-    /* ===================== 消息功能 ===================== */
+    /* ===================== Message Functions ===================== */
     /**
-     * @notice 发送消息
-     * @dev 只有成员可以调用
-     *      消息类型：0 = 明文（需启用 plaintextEnabled），1 = 密文（由前端加密）
-     *      消息同时存储在事件和状态中：
-     *      - 事件：便宜、易于索引，但合约无法读取
-     *      - 状态：可供合约读取，但成本较高
+     * @notice Send message
+     * @dev Only members can call
+     *      Message type: 0 = plaintext (requires plaintextEnabled), 1 = ciphertext (encrypted by frontend)
+     *      Messages are stored in both events and state:
+     *      - Events: Cheap, easy to index, but contracts cannot read
+     *      - State: Can be read by contracts, but higher cost
      */
     function sendMessage(
         uint8 kind,
         string calldata content,
         string calldata cid
     ) external onlyMember whenNotPaused {
-        // 如果是明文消息，检查是否允许
+        // If plaintext message, check if allowed
         if (kind == 0) {
             require(plaintextEnabled, "PlaintextOff");
         }
-        // 检查消息长度
+        // Check message length
         require(bytes(content).length <= messageMaxBytes, "TooLarge");
 
         seq += 1;
         uint40 ts = uint40(block.timestamp);
         bytes32 contentHash = keccak256(bytes(content));
 
-        // 触发消息广播事件（链下索引使用）
+        // Emit message broadcast event (for off-chain indexing)
         emit MessageBroadcasted(address(this), msg.sender, kind, seq, contentHash, cid, ts);
 
-        // 存储消息到状态（链上读取使用）
+        // Store message in state (for on-chain reading)
         _messages.push(Message({
             sender: msg.sender,
             ts: ts,
@@ -334,17 +334,17 @@ contract Room is Pausable {
         }));
     }
 
-    /* ===================== 查询函数 ===================== */
+    /* ===================== Query Functions ===================== */
     /**
-     * @notice 获取消息总数
+     * @notice Get total number of messages
      */
     function messageCount() external view returns (uint256) {
         return _messages.length;
     }
 
     /**
-     * @notice 获取指定索引的消息
-     * @dev 从状态存储中读取消息
+     * @notice Get message at specified index
+     * @dev Reads message from state storage
      */
     function getMessage(uint256 index) external view returns (
         address sender, uint40 ts, uint8 kind, string memory content, string memory cid
@@ -354,26 +354,26 @@ contract Room is Pausable {
     }
 
     /**
-     * @notice 分页读取消息历史
-     * @dev 返回区间 [start, start+count) 的消息
-     *      如果 start+count 超出范围，只返回到最后一条消息
+     * @notice Read message history with pagination
+     * @dev Returns messages in range [start, start+count)
+     *      If start+count exceeds range, only returns up to last message
      */
     function getMessages(uint256 start, uint256 count) external view returns (Message[] memory) {
         uint256 totalMessages = _messages.length;
         
-        // 如果起始位置超出范围，返回空数组
+        // If starting position out of range, return empty array
         if (start >= totalMessages) {
             return new Message[](0);
         }
         
-        // 计算实际返回的消息数量
+        // Calculate actual number of messages to return
         uint256 end = start + count;
         if (end > totalMessages) {
             end = totalMessages;
         }
         uint256 actualCount = end - start;
         
-        // 创建返回数组并填充数据
+        // Create return array and fill data
         Message[] memory result = new Message[](actualCount);
         for (uint256 i = 0; i < actualCount; i++) {
             result[i] = _messages[start + i];
@@ -382,28 +382,28 @@ contract Room is Pausable {
         return result;
     }
 
-    /* ===================== 管理员函数 ===================== */
+    /* ===================== Admin Functions ===================== */
     /**
-     * @notice 暂停合约
-     * @dev 只有群主可以调用，暂停后禁止邀请、发消息等操作
+     * @notice Pause contract
+     * @dev Only owner can call, after pausing, inviting and sending messages are prohibited
      */
     function pause() external onlyOwner {
         _pause();
     }
 
     /**
-     * @notice 恢复合约
-     * @dev 只有群主可以调用
+     * @notice Unpause contract
+     * @dev Only owner can call
      */
     function unpause() external onlyOwner {
         _unpause();
     }
 
     /**
-     * @notice 转让小群群主
-     * @dev 只有当前群主可以调用，新群主不能为零地址
-     *      新群主必须是小群成员
-     * @param newOwner 新群主地址
+     * @notice Transfer room ownership
+     * @dev Only current owner can call, new owner cannot be zero address
+     *      New owner must be a room member
+     * @param newOwner New owner address
      */
     function transferRoomOwnership(address newOwner) external onlyOwner {
         require(newOwner != address(0), "ZeroAddr");
