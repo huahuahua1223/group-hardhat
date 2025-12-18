@@ -9,6 +9,7 @@
     "test:community": "hardhat test test/Community.ts",
     "test:room": "hardhat test test/Room.ts",
     "test:integration": "hardhat test test/Integration.ts",
+    "test:keydist": "hardhat test test/KeyDistribution.ts",
     "test:solidity": "hardhat test solidity",
     "compile": "hardhat compile",
     "clean": "hardhat clean",

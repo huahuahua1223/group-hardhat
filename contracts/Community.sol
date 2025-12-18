@@ -74,6 +74,9 @@ contract Community is Ownable, Pausable {
     event GroupKeyEpochIncreased(uint64 epoch, bytes32 metadataHash);
     event RsaGroupPublicKeyUpdated(uint64 epoch, string rsaPublicKey);
 
+    // 密钥分发
+    event KeyDistributed(uint64 indexed distributionEpoch, bytes32 merkleRoot, string ipfsCid, uint40 timestamp);
+
     // 元数据
     event CommunityMetadataSet(address indexed topicToken, uint8 maxTier, string name, string avatarCid);
     
@@ -148,6 +151,20 @@ contract Community is Ownable, Pausable {
     uint8   public maxTier;               // 1..7
     string  public name_;                 // 群名称
     string  public avatarCid;             // 头像 CID
+
+    // ========== 新增：密钥分发信息 ==========
+    struct KeyDistribution {
+        bytes32 merkleRoot;         // 成员地址和加密密钥的 Merkle Root
+        string ipfsCid;             // IPFS 文件 CID（存储完整的加密密钥数据）
+        uint64 distributionEpoch;   // 分发版本号
+        uint40 timestamp;           // 分发时间戳
+    }
+    
+    /// @notice 密钥分发记录：distributionEpoch => KeyDistribution
+    mapping(uint64 => KeyDistribution) public keyDistributions;
+    
+    /// @notice 当前密钥分发版本号
+    uint64 public currentDistributionEpoch;
     
     /// @notice 小群默认邀请费（大群群主设置）
     uint256 public defaultInviteFee;
@@ -833,5 +850,94 @@ contract Community is Ownable, Pausable {
         require(address(redPacket) == address(0), "already set");
         require(redPacket_ != address(0), "ZeroAddr");
         redPacket = IUniChatRedPacket(redPacket_);
+    }
+
+    /* ===================== 密钥分发功能 ===================== */
+    /**
+     * @notice 群主分发群密钥
+     * @dev 只有群主可以调用
+     *      前端流程：
+     *      1. 调用 getActiveMembers 获取所有活跃成员地址
+     *      2. 为每个成员使用其公钥加密群密钥
+     *      3. 使用 merkletreejs 构建 Merkle Tree（叶子节点：keccak256(address, encryptedKey)）
+     *      4. 将完整的加密密钥文件上传到 IPFS
+     *      5. 调用此函数，传入 Merkle Root 和 IPFS CID
+     * @param merkleRoot 成员地址和加密密钥的 Merkle Root
+     * @param ipfsCid IPFS 文件 CID（存储所有成员的加密密钥）
+     */
+    function distributeGroupKey(bytes32 merkleRoot, string calldata ipfsCid) external onlyOwner whenNotPaused {
+        require(merkleRoot != bytes32(0), "ZeroRoot");
+        require(bytes(ipfsCid).length > 0, "EmptyCid");
+
+        currentDistributionEpoch += 1;
+        
+        keyDistributions[currentDistributionEpoch] = KeyDistribution({
+            merkleRoot: merkleRoot,
+            ipfsCid: ipfsCid,
+            distributionEpoch: currentDistributionEpoch,
+            timestamp: uint40(block.timestamp)
+        });
+
+        emit KeyDistributed(currentDistributionEpoch, merkleRoot, ipfsCid, uint40(block.timestamp));
+    }
+
+    /**
+     * @notice 获取指定版本的密钥分发信息
+     * @param distributionEpoch 分发版本号
+     * @return merkleRoot Merkle Root
+     * @return ipfsCid IPFS CID
+     * @return epoch 分发版本号
+     * @return timestamp 分发时间戳
+     */
+    function getKeyDistribution(uint64 distributionEpoch) external view returns (
+        bytes32 merkleRoot,
+        string memory ipfsCid,
+        uint64 epoch,
+        uint40 timestamp
+    ) {
+        KeyDistribution storage kd = keyDistributions[distributionEpoch];
+        return (kd.merkleRoot, kd.ipfsCid, kd.distributionEpoch, kd.timestamp);
+    }
+
+    /**
+     * @notice 获取最新的密钥分发信息
+     * @return merkleRoot Merkle Root
+     * @return ipfsCid IPFS CID
+     * @return epoch 分发版本号
+     * @return timestamp 分发时间戳
+     */
+    function getLatestKeyDistribution() external view returns (
+        bytes32 merkleRoot,
+        string memory ipfsCid,
+        uint64 epoch,
+        uint40 timestamp
+    ) {
+        if (currentDistributionEpoch == 0) {
+            return (bytes32(0), "", uint64(0), uint40(0));
+        }
+        KeyDistribution storage kd = keyDistributions[currentDistributionEpoch];
+        return (kd.merkleRoot, kd.ipfsCid, kd.distributionEpoch, kd.timestamp);
+    }
+
+    /**
+     * @notice 验证用户的加密密钥是否在 Merkle Tree 中
+     * @dev 前端使用：用户下载 IPFS 文件，提取自己的加密密钥，验证是否在 Merkle Tree 中
+     * @param distributionEpoch 分发版本号
+     * @param account 用户地址
+     * @param encryptedKey 加密后的群密钥（前端从 IPFS 获取）
+     * @param proof Merkle Proof
+     * @return 是否验证通过
+     */
+    function verifyEncryptedKey(
+        uint64 distributionEpoch,
+        address account,
+        bytes calldata encryptedKey,
+        bytes32[] calldata proof
+    ) external view returns (bool) {
+        KeyDistribution storage kd = keyDistributions[distributionEpoch];
+        if (kd.merkleRoot == bytes32(0)) return false;
+        
+        bytes32 leaf = keccak256(abi.encodePacked(account, encryptedKey));
+        return proof.verify(kd.merkleRoot, leaf);
     }
 }
