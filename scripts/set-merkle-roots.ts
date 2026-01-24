@@ -1,6 +1,7 @@
 import { network } from "hardhat";
 import { readFile, writeFile } from "fs/promises";
 import type { Address } from "viem";
+import { getChainConfig } from "./config/chain-config.js";
 
 /**
  * 第二步：为所有 Community 设置 Merkle Root
@@ -9,9 +10,11 @@ import type { Address } from "viem";
  * 1. 读取 created-communities.json 获取群聊地址
  * 2. 读取对应的 Merkle Root 元数据
  * 3. 为每个群聊设置 Merkle Root
+ * 4. 支持多链：通过 --network 参数指定链
  * 
  * 使用方法：
- * pnpm run set-merkle-roots
+ * pnpm hardhat run scripts/set-merkle-roots.ts --network arbitrum
+ * pnpm hardhat run scripts/set-merkle-roots.ts --network opbnb
  */
 
 // 数据结构
@@ -52,27 +55,6 @@ interface MerkleRootResult {
   totalUsers: number;
 }
 
-// 读取已创建的群聊信息
-async function loadCreatedCommunities(): Promise<CreatedCommunitiesData> {
-  const filePath = "./output/arbitrum/created-communities.json";
-  try {
-    const content = await readFile(filePath, "utf-8");
-    return JSON.parse(content);
-  } catch (error) {
-    throw new Error(`无法读取群聊信息: ${filePath}\n请先运行 create-communities.ts 创建群聊`);
-  }
-}
-
-// 读取 Merkle Root
-async function loadMerkleRoot(symbol: string, tier: number): Promise<MerkleMetadata> {
-  const metadataPath = `./output/arbitrum/metadata/${symbol}/${tier}.json`;
-  try {
-    const content = await readFile(metadataPath, "utf-8");
-    return JSON.parse(content);
-  } catch (error) {
-    throw new Error(`无法读取 Merkle Root: ${metadataPath}\n请先运行 generate-all-proofs.ps1 生成 Merkle Proof`);
-  }
-}
 
 async function main() {
   console.log("=".repeat(60));
@@ -83,7 +65,38 @@ async function main() {
   const publicClient = await viem.getPublicClient();
   const [deployer] = await viem.getWalletClients();
 
+  // 动态识别链
+  const chainId = await publicClient.getChainId();
+  const cfg = getChainConfig(chainId);
+
+  console.log(`\n链信息:`);
+  console.log(`  ChainId: ${chainId}`);
+  console.log(`  网络: ${cfg.name}`);
   console.log(`\n使用账户: ${deployer.account.address}\n`);
+
+  // 动态路径
+  const createdCommunitiesPath = `${cfg.outputDir}/created-communities.json`;
+
+  // 读取已创建的群聊信息
+  async function loadCreatedCommunities(): Promise<CreatedCommunitiesData> {
+    try {
+      const content = await readFile(createdCommunitiesPath, "utf-8");
+      return JSON.parse(content);
+    } catch (error) {
+      throw new Error(`无法读取群聊信息: ${createdCommunitiesPath}\n请先运行 create-communities.ts 创建群聊`);
+    }
+  }
+
+  // 读取 Merkle Root
+  async function loadMerkleRoot(symbol: string, tier: number): Promise<MerkleMetadata> {
+    const metadataPath = `${cfg.outputDir}/metadata/${symbol}/${tier}.json`;
+    try {
+      const content = await readFile(metadataPath, "utf-8");
+      return JSON.parse(content);
+    } catch (error) {
+      throw new Error(`无法读取 Merkle Root: ${metadataPath}\n请先运行 generate-all-proofs.ps1 生成 Merkle Proof`);
+    }
+  }
 
   // 1. 读取已创建的群聊信息
   console.log("1️⃣  读取群聊信息...\n");
@@ -167,7 +180,7 @@ async function main() {
     addressMap: data.addressMap,
   };
 
-  const outputPath = "./output/arbitrum/deployed-communities.json";
+  const outputPath = `${cfg.outputDir}/deployed-communities.json`;
 
   try {
     await writeFile(outputPath, JSON.stringify(finalResult, null, 2), "utf-8");

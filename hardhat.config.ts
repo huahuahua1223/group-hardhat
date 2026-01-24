@@ -47,19 +47,39 @@ const config: HardhatUserConfig = {
       type: "http",
       chainType: "l1",
       url: configVariable("SEPOLIA_RPC_URL"),
-      accounts: [configVariable("SEPOLIA_PRIVATE_KEY")],
+      accounts: [configVariable("DEPLOYER_PRIVATE_KEY")],
     },
     arbitrum: {
       type: "http",
       chainType: "l1",
       url: configVariable("ARBITRUM_RPC_URL"),
-      accounts: [configVariable("ARBITRUM_PRIVATE_KEY")],
+      accounts: [configVariable("DEPLOYER_PRIVATE_KEY")],
+    },
+    opbnb: {
+      type: "http",
+      chainType: "op",
+      url: configVariable("OPBNB_RPC_URL"),
+      accounts: [configVariable("DEPLOYER_PRIVATE_KEY")],
+    },
+    gnosis: {
+      type: "http",
+      chainType: "l1",
+      url: configVariable("GNOSIS_RPC_URL"),
+      accounts: [configVariable("DEPLOYER_PRIVATE_KEY")],
     },
   },
   verify: {
     etherscan: {
       // 统一的 Etherscan V2 API key
       apiKey: configVariable("ETHERSCAN_API_KEY"),
+    },
+  },
+  ignition: {
+    strategyConfig: {
+      create2: {
+        // EOA + 00 + 熵 (32 bytes)
+        salt: "0x0041d9424581231161d75af27b8ab92090d3725e000000000000000000001234",
+      },
     },
   },
 };

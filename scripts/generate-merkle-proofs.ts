@@ -1,8 +1,10 @@
+import { network } from "hardhat";
 import { createReadStream } from "fs";
 import { writeFile, mkdir } from "fs/promises";
 import { parse } from "csv-parse";
 import { MerkleTree, computeLeaf, type MerkleLeaf } from "./utils/merkleTree.js";
 import type { Address } from "viem";
+import { getChainConfig } from "./config/chain-config.js";
 
 /**
  * 从 CSV 文件生成 Merkle Tree 和 Proof
@@ -12,10 +14,8 @@ import type { Address } from "viem";
  * 0x1234...,1,0xabcd...,3,1735689600,0x0001...
  * 
  * 使用方法：
- * npx hardhat run scripts/generate-merkle-proofs.ts
- * 
- * 或指定 CSV 文件路径：
- * CSV_PATH=./data/whitelist.csv npx hardhat run scripts/generate-merkle-proofs.ts
+ * CSV_PATH=./data/arbitrum/ARB/1.csv pnpm hardhat run scripts/generate-merkle-proofs.ts --network arbitrum
+ * CSV_PATH=./data/opbnb/USDT/1.csv pnpm hardhat run scripts/generate-merkle-proofs.ts --network opbnb
  */
 
 interface CSVRow {
@@ -51,9 +51,19 @@ async function main() {
   console.log("📋 从 CSV 生成 Merkle Tree 和 Proof");
   console.log("=".repeat(60));
 
+  // 获取链配置
+  const { viem } = await network.connect();
+  const publicClient = await viem.getPublicClient();
+  const chainId = await publicClient.getChainId();
+  const cfg = getChainConfig(chainId);
+
+  console.log(`\n链信息:`);
+  console.log(`  ChainId: ${chainId}`);
+  console.log(`  网络: ${cfg.name}\n`);
+
   // 1. 读取 CSV 文件路径
   const csvPath = process.env.CSV_PATH || "./data/whitelist.csv";
-  console.log(`\n📂 读取 CSV 文件: ${csvPath}\n`);
+  console.log(`📂 读取 CSV 文件: ${csvPath}\n`);
 
   // 提取代币符号和档位（从路径）
   // 例如: ./data/arbitrum/ARB/1.csv -> Symbol=ARB, maxTier=1
@@ -217,12 +227,9 @@ async function main() {
   // 7. 保存到文件
   console.log("\n💾 保存结果...\n");
 
-  // 输出目录结构
-  const chain = pathParts.includes('arbitrum') ? 'arbitrum' : 
-                pathParts.includes('ethereum') ? 'ethereum' : 'unknown';
-
-  const metadataDir = `./output/${chain}/metadata/${symbol}`;
-  const proofMapDir = `./output/${chain}/proof-map/${symbol}`;
+  // 动态输出目录（使用链配置）
+  const metadataDir = `${cfg.outputDir}/metadata/${symbol}`;
+  const proofMapDir = `${cfg.outputDir}/proof-map/${symbol}`;
 
   // 文件路径（使用档位作为文件名）
   const metadataPath = `${metadataDir}/${maxTier}.json`;
@@ -316,15 +323,14 @@ async function main() {
   console.log(`   const proofArray = proof.slice(1, -1).split(',');  // 去掉 "[ 和 ]"`);
 
   console.log("\n4️⃣  批量处理多个代币:");
-  console.log(`   for symbol in ARB WETH USDT; do`);
-  console.log(`     CSV_PATH=./data/${chain}/$symbol.csv pnpm hardhat run scripts/generate-merkle-proofs.ts`);
-  console.log(`   done`);
+  console.log(`   .\\scripts\\generate-all-proofs.ps1 -Chain ${cfg.name}`);
 
   console.log("\n💡 提示:");
   console.log("   • 文件按代币符号命名，便于管理");
   console.log("   • CSV 格式可直接导入 PostgreSQL");
   console.log("   • Next.js 可通过 API 查询用户 Proof");
   console.log("   • 支持批量检查用户资格");
+  console.log(`   • 输出目录: ${cfg.outputDir}`);
 }
 
 main()

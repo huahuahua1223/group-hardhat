@@ -1,47 +1,30 @@
 import { network } from "hardhat";
 import { writeFile, mkdir, readFile } from "fs/promises";
 import type { Address } from "viem";
+import { getChainConfig } from "./config/chain-config.js";
 
 /**
- * 第一步：创建 9 个 Community 群聊
+ * 第一步：创建 Community 群聊
  * 
  * 功能：
- * 1. 使用已部署的 CommunityFactory 创建 9 个群聊（3个代币 × 3个档位）
+ * 1. 使用已部署的 CommunityFactory 创建群聊（根据链配置中的代币 × 3个档位）
  * 2. 保存创建的群聊地址到 JSON 文件
  * 3. 支持断点续传：如果中途失败，重新运行会跳过已创建的群聊
+ * 4. 支持多链：通过 --network 参数指定链，自动适配配置
  * 
  * 使用方法：
- * pnpm run create-communities
+ * pnpm hardhat run scripts/create-communities.ts --network arbitrum
+ * pnpm hardhat run scripts/create-communities.ts --network opbnb
  */
 
 // 配置常量
-const COMMUNITY_OWNER = "0x930AB98c99E6AaAc76A6AeCFAd9da77A7b7C2Fa8" as Address;
-
-const TOKENS = {
-  ARB: "0x912CE59144191C1204E64559FE8253a0e49E6548" as Address,
-  USDT: "0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9" as Address,
-  WETH: "0x82aF49447D8a07e3bd95BD0d56f35241523fBab1" as Address,
-};
-
-const AVATARS = {
-  ARB: "bafkreihfrzi6bbjt6eap3e6xwlgwyhck3fcwxs6eujegzhhpaqpijz3tim",
-  USDT: "bafkreibn4y6llleughtp5pgu37lve7mymvcffpo5i2h6iw4t4iwo6z5ocu",
-  WETH: "bafkreicijvbdd5rbejczpxv47ttblwsbjqsijxzml4svwsekdojbejilfe",
-};
+const COMMUNITY_OWNER = "0x0041d9424581231161D75AF27b8AB92090d3725e" as Address;
 
 const TIER_NAMES: Record<number, string> = {
   1: "比特鱼苗",
   2: "以太飞鱼",
   3: "POW 小鲸",
 };
-
-// 已部署的合约地址（从环境变量读取）
-const FACTORY_ADDRESS = (process.env.FACTORY_ADDRESS || "") as Address;
-const RED_PACKET_ADDRESS = (process.env.RED_PACKET_ADDRESS || "") as Address;
-
-// 输出文件路径
-const OUTPUT_DIR = "./output/arbitrum";
-const OUTPUT_PATH = `${OUTPUT_DIR}/created-communities.json`;
 
 // 数据结构
 interface CommunityInfo {
@@ -58,6 +41,7 @@ interface CommunityInfo {
 interface SavedData {
   timestamp: string;
   network: string;
+  chainId: number;
   factory: Address;
   owner: Address;
   communities: CommunityInfo[];
@@ -67,40 +51,6 @@ interface SavedData {
 // 生成群聊的唯一键
 function getCommunityKey(symbol: string, tier: number): string {
   return `${symbol}-${tier}`;
-}
-
-// 加载已保存的数据
-async function loadExistingData(): Promise<SavedData | null> {
-  try {
-    const content = await readFile(OUTPUT_PATH, "utf-8");
-    return JSON.parse(content) as SavedData;
-  } catch {
-    return null;
-  }
-}
-
-// 保存数据到文件
-async function saveData(communities: CommunityInfo[]): Promise<void> {
-  const result: SavedData = {
-    timestamp: new Date().toISOString(),
-    network: "arbitrum",
-    factory: FACTORY_ADDRESS,
-    owner: COMMUNITY_OWNER,
-    communities: communities,
-    addressMap: {
-      ARB: {} as Record<string, string>,
-      USDT: {} as Record<string, string>,
-      WETH: {} as Record<string, string>,
-    },
-  };
-
-  // 填充地址映射
-  for (const community of communities) {
-    result.addressMap[community.symbol as keyof typeof result.addressMap][community.tier.toString()] = community.address;
-  }
-
-  await mkdir(OUTPUT_DIR, { recursive: true });
-  await writeFile(OUTPUT_PATH, JSON.stringify(result, null, 2), "utf-8");
 }
 
 // 重试查询事件
@@ -139,24 +89,82 @@ async function getEventWithRetry(
 
 async function main() {
   console.log("=".repeat(60));
-  console.log("第一步：创建 9 个 Community 群聊");
+  console.log("第一步：创建 Community 群聊");
   console.log("=".repeat(60));
-
-  if (!FACTORY_ADDRESS) {
-    throw new Error("请设置环境变量 FACTORY_ADDRESS");
-  }
-  if (!RED_PACKET_ADDRESS) {
-    throw new Error("请设置环境变量 RED_PACKET_ADDRESS");
-  }
 
   const { viem } = await network.connect();
   const publicClient = await viem.getPublicClient();
   const [deployer] = await viem.getWalletClients();
 
+  // 动态识别链
+  const chainId = await publicClient.getChainId();
+  const cfg = getChainConfig(chainId);
+
+  console.log(`\n链信息:`);
+  console.log(`  ChainId: ${chainId}`);
+  console.log(`  网络: ${cfg.name}`);
+  console.log(`  代币数: ${Object.keys(cfg.tokens).length}`);
+
+  // 按链读取环境变量
+  const FACTORY_ADDRESS = (process.env[cfg.factoryEnvKey] || "") as Address;
+  const RED_PACKET_ADDRESS = (process.env[cfg.redPacketEnvKey] || "") as Address;
+
+  if (!FACTORY_ADDRESS) {
+    throw new Error(`请设置环境变量 ${cfg.factoryEnvKey}`);
+  }
+  if (!RED_PACKET_ADDRESS) {
+    throw new Error(`请设置环境变量 ${cfg.redPacketEnvKey}`);
+  }
+
+  // 动态输出路径
+  const OUTPUT_DIR = cfg.outputDir;
+  const OUTPUT_PATH = `${OUTPUT_DIR}/created-communities.json`;
+
+  // 使用配置中的 tokens 和 avatars
+  const TOKENS = cfg.tokens;
+  const AVATARS = cfg.avatars;
+
   console.log(`\n使用账户: ${deployer.account.address}`);
   console.log(`群主账户: ${COMMUNITY_OWNER}`);
   console.log(`Factory 地址: ${FACTORY_ADDRESS}`);
   console.log(`RedPacket 地址: ${RED_PACKET_ADDRESS}\n`);
+
+  // 加载已保存的数据
+  async function loadExistingData(): Promise<SavedData | null> {
+    try {
+      const content = await readFile(OUTPUT_PATH, "utf-8");
+      return JSON.parse(content) as SavedData;
+    } catch {
+      return null;
+    }
+  }
+
+  // 保存数据到文件
+  async function saveData(communities: CommunityInfo[]): Promise<void> {
+    const result: SavedData = {
+      timestamp: new Date().toISOString(),
+      network: cfg.name,
+      chainId,
+      factory: FACTORY_ADDRESS,
+      owner: COMMUNITY_OWNER,
+      communities: communities,
+      addressMap: {},
+    };
+
+    // 动态构建 addressMap
+    for (const [symbol] of Object.entries(cfg.tokens)) {
+      result.addressMap[symbol] = {};
+    }
+    for (const c of communities) {
+      if (!result.addressMap[c.symbol]) {
+        result.addressMap[c.symbol] = {};
+      }
+      result.addressMap[c.symbol][String(c.tier)] = c.address;
+    }
+
+    await mkdir(OUTPUT_DIR, { recursive: true });
+    await writeFile(OUTPUT_PATH, JSON.stringify(result, null, 2), "utf-8");
+  }
 
   // 获取 Factory 合约实例
   const factory = await viem.getContractAt("CommunityFactory", FACTORY_ADDRESS);
@@ -314,11 +322,11 @@ async function main() {
   console.log(`\n💾 详细信息已保存到: ${OUTPUT_PATH}`);
   console.log(`\n⏭️  下一步流程:`);
   console.log(`\n   步骤 1: 手动更新 CSV 文件中的 community 地址`);
-  console.log(`   将上面的群聊地址复制到对应的 data/arbitrum/{Symbol}/{Tier}.csv 文件`);
+  console.log(`   将上面的群聊地址复制到对应的 data/${cfg.name}/{Symbol}/{Tier}.csv 文件`);
   console.log(`\n   步骤 2: 生成 Merkle Proof`);
-  console.log(`   .\\scripts\\generate-all-proofs.ps1`);
+  console.log(`   .\\scripts\\generate-all-proofs.ps1 -Chain ${cfg.name}`);
   console.log(`\n   步骤 3: 设置 Merkle Root`);
-  console.log(`   pnpm run set-merkle-roots`);
+  console.log(`   pnpm hardhat run scripts/set-merkle-roots.ts --network ${cfg.name}`);
 }
 
 main()

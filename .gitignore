@@ -28,6 +28,8 @@
 # 真实的白名单 CSV 文件（保留示例文件）
 /data/*.csv
 /data/arbitrum/
+/data/opbnb/
+/data/gnosis/
 !/data/whitelist.example.csv
 
 # Environment variables
