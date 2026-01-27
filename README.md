@@ -280,25 +280,58 @@ npx hardhat node
 npm run deploy:local
 ```
 
-### 测试网部署
+### 配置环境变量
 
 ```bash
-# 配置环境变量
-export SEPOLIA_RPC_URL="https://..."
-export PRIVATE_KEY="0x..."
+# 复制环境变量模板
+cp .env.example .env
 
-# 部署到 Sepolia
-npm run deploy:sepolia
+# 编辑 .env 文件，填入以下必填项：
+# - RPC_URL（网络 RPC 地址）
+# - DEPLOYER_PRIVATE_KEY（部署者私钥）
+# - ETHERSCAN_API_KEY（区块浏览器 API Key，用于合约验证）
+# - UNICHAT_TOKEN_ADDRESS（留空，首次部署后填入）
 ```
 
 ### 部署流程
 
-1. 部署 MockUNICHAT 代币
-2. 部署 Community 和 Room 实现合约
-3. 部署 CommunityFactory（引用实现合约）
-4. 使用 Factory 创建 Community 实例
-5. 群主设置 Merkle Root
-6. 用户加入并创建 Room
+#### 1. 部署 UNICHAT 代币
+
+```bash
+# 根据目标网络选择命令
+pnpm deploy:token:arbitrum   # Arbitrum 网络
+pnpm deploy:token:opbnb      # opBNB 网络
+pnpm deploy:token:gnosis     # Gnosis 网络
+```
+
+部署完成后，将代币地址填入 `.env` 文件的 `UNICHAT_TOKEN_ADDRESS` 变量。
+
+#### 2. 部署 CommunityFactory
+
+```bash
+# 根据目标网络选择命令
+pnpm deploy:arbitrum   # Arbitrum 网络
+pnpm deploy:opbnb      # opBNB 网络
+pnpm deploy:gnosis     # Gnosis 网络
+```
+
+此步骤会自动部署：
+- Community 实现合约
+- Room 实现合约
+- CommunityFactory 工厂合约
+
+#### 3. 后续操作
+
+1. 使用 Factory 创建 Community 实例
+2. 群主设置 Merkle Root
+3. 用户加入并创建 Room
+
+### 注意事项
+
+⚠️ **重要**：
+- `UNICHAT_TOKEN_ADDRESS` 必须在部署 CommunityFactory 前设置
+- 如果未设置，部署会失败并提示错误信息
+- 建议在多个网络使用同一个 UNICHAT 代币地址（跨链部署）
 
 ## 📚 文档
 
