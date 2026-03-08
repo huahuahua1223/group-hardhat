@@ -82,6 +82,9 @@ contract Community is Ownable, Pausable {
     
     /// @notice Emitted when large group ownership is transferred
     event CommunityOwnershipTransferred(address indexed previousOwner, address indexed newOwner);
+    
+    /// @notice Emitted when claim operator permission is updated
+    event ClaimOperatorUpdated(address indexed operator, bool allowed);
 
     /* ===================== State Variables ===================== */
     /// @notice Fee token contract address
@@ -107,6 +110,9 @@ contract Community is Ownable, Pausable {
 
     /// @notice Whether user is a member
     mapping(address => bool) public isMember;
+    
+    /// @notice Addresses allowed to add members via claim flow
+    mapping(address => bool) public claimOperators;
     
     /// @notice User's asset tier
     mapping(address => uint256) public memberTier;
@@ -196,6 +202,14 @@ contract Community is Ownable, Pausable {
      */
     modifier onlyActiveMember() {
         require(isMember[msg.sender] && lastJoinedEpoch[msg.sender] == currentEpoch, "NotActiveMember");
+        _;
+    }
+    
+    /**
+     * @notice Only addresses authorized for claim-based join can call
+     */
+    modifier onlyClaimOperator() {
+        require(claimOperators[msg.sender], "NotClaimOperator");
         _;
     }
 
@@ -319,6 +333,15 @@ contract Community is Ownable, Pausable {
         require(_maxTier >= 1 && _maxTier <= maxTier, "BadTier");
         
         _addMember(account, _maxTier, currentEpoch);
+    }
+    
+    /**
+     * @notice Claim flow entrypoint to add a member with max tier in current epoch
+     * @dev Callable only by authorized claim operator contracts
+     */
+    function claimJoin(address account) external onlyClaimOperator whenNotPaused {
+        require(account != address(0), "ZeroAddr");
+        _addMember(account, maxTier, currentEpoch);
     }
 
     /**
@@ -810,6 +833,16 @@ contract Community is Ownable, Pausable {
         }
         
         return result;
+    }
+    
+    /**
+     * @notice Set claim operator permission
+     * @dev Only owner can call
+     */
+    function setClaimOperator(address operator, bool allowed) external onlyOwner {
+        require(operator != address(0), "ZeroAddr");
+        claimOperators[operator] = allowed;
+        emit ClaimOperatorUpdated(operator, allowed);
     }
 
     /* ===================== Admin Functions ===================== */
