@@ -74,9 +74,12 @@ contract CommunityFactory is Ownable, Pausable {
     /// @notice Emitted when treasury address is updated
     event TreasuryUpdated(address newTreasury);
 
+    /// @notice Emitted when fee token is updated
+    event UnichatTokenUpdated(address newUnichatToken);
+
     /* ===================== State Variables ===================== */
-    /// @notice Fee token contract address (immutable)
-    IERC20 public immutable UNICHAT;
+    /// @notice Fee token contract address
+    IERC20 public UNICHAT;
     
     /// @notice Fee receiving treasury address
     address public treasury;
@@ -151,6 +154,16 @@ contract CommunityFactory is Ownable, Pausable {
         require(newTreasury != address(0), "ZeroAddr");
         treasury = newTreasury;
         emit TreasuryUpdated(newTreasury);
+    }
+
+    /**
+     * @notice Update fee token address
+     * @dev Only owner can call, new token address cannot be zero address
+     */
+    function setUnichatToken(address newUnichatToken) external onlyOwner {
+        require(newUnichatToken != address(0), "ZeroAddr");
+        UNICHAT = IERC20(newUnichatToken);
+        emit UnichatTokenUpdated(newUnichatToken);
     }
 
     /* ===================== Read Functions ===================== */

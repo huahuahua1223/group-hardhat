@@ -86,6 +86,9 @@ contract Community is Ownable, Pausable {
     /// @notice Emitted when claim operator permission is updated
     event ClaimOperatorUpdated(address indexed operator, bool allowed);
 
+    /// @notice Emitted when fee token is updated
+    event UnichatTokenUpdated(address newUnichatToken);
+
     /* ===================== State Variables ===================== */
     /// @notice Fee token contract address
     IERC20 public UNICHAT;
@@ -843,6 +846,16 @@ contract Community is Ownable, Pausable {
         require(operator != address(0), "ZeroAddr");
         claimOperators[operator] = allowed;
         emit ClaimOperatorUpdated(operator, allowed);
+    }
+
+    /**
+     * @notice Update fee token address
+     * @dev Only owner can call, new token address cannot be zero address
+     */
+    function setUnichatToken(address newUnichatToken) external onlyOwner {
+        require(newUnichatToken != address(0), "ZeroAddr");
+        UNICHAT = IERC20(newUnichatToken);
+        emit UnichatTokenUpdated(newUnichatToken);
     }
 
     /* ===================== Admin Functions ===================== */
