@@ -85,9 +85,12 @@ contract Community is Ownable, Pausable {
     
     /// @notice Emitted when claim operator permission is updated
     event ClaimOperatorUpdated(address indexed operator, bool allowed);
-
-    /// @notice Emitted when fee token is updated
-    event UnichatTokenUpdated(address newUnichatToken);
+    
+    /// @notice Emitted when community message fee is updated
+    event CommunityMessageFeeUpdated(uint256 newFee);
+    
+    /// @notice Emitted when message fee whitelist is updated
+    event MessageFeeWhitelistUpdated(address indexed account, bool allowed);
 
     /* ===================== State Variables ===================== */
     /// @notice Fee token contract address
@@ -150,6 +153,8 @@ contract Community is Ownable, Pausable {
     uint256 public seq;                   // Large group message sequence number
     bool    public plaintextEnabled;      // Whether plaintext is allowed (default true)
     uint32  public communityMessageMaxBytes;  // Default 2048
+    uint256 public communityMessageFee;   // Fee charged per community message
+    mapping(address => bool) public messageFeeWhitelist;  // Whitelisted accounts do not pay message fee
 
     // ========== New: RSA group chat public key ==========
     string public rsaGroupPublicKey;      // Group chat public key used by frontend (PEM/Base64 text)
@@ -250,6 +255,7 @@ contract Community is Ownable, Pausable {
         // Large group message default parameters
         plaintextEnabled = true;
         communityMessageMaxBytes = 2048;
+        communityMessageFee = 0;
 
         // Topic token & metadata
         topicToken = _topicToken;
@@ -431,6 +437,7 @@ contract Community is Ownable, Pausable {
         string calldata content,
         string calldata cid
     ) external onlyActiveMember whenNotPaused {
+        _chargeCommunityMessageFee(msg.sender);
         _sendCommunityMessage(msg.sender, kind, content, cid);
     }
 
@@ -466,6 +473,17 @@ contract Community is Ownable, Pausable {
             content: content,
             cid: cid
         }));
+    }
+
+    /**
+     * @notice Internal function: charge message fee for community message
+     * @dev Whitelisted accounts are exempt from message fee
+     */
+    function _chargeCommunityMessageFee(address payer) internal {
+        if (communityMessageFee == 0 || messageFeeWhitelist[payer]) {
+            return;
+        }
+        UNICHAT.safeTransferFrom(payer, treasury, communityMessageFee);
     }
 
     /**
@@ -632,6 +650,25 @@ contract Community is Ownable, Pausable {
     function setCommunityMessageMaxBytes(uint32 n) external onlyOwner { 
         require(n > 0, "BadMax"); 
         communityMessageMaxBytes = n; 
+    }
+
+    /**
+     * @notice Set community message fee
+     * @dev Only owner can call
+     */
+    function setCommunityMessageFee(uint256 newFee) external onlyOwner {
+        communityMessageFee = newFee;
+        emit CommunityMessageFeeUpdated(newFee);
+    }
+
+    /**
+     * @notice Set message fee whitelist status
+     * @dev Only owner can call
+     */
+    function setMessageFeeWhitelist(address account, bool allowed) external onlyOwner {
+        require(account != address(0), "ZeroAddr");
+        messageFeeWhitelist[account] = allowed;
+        emit MessageFeeWhitelistUpdated(account, allowed);
     }
 
     /* ===================== RSA Group Chat Public Key ===================== */
@@ -846,16 +883,6 @@ contract Community is Ownable, Pausable {
         require(operator != address(0), "ZeroAddr");
         claimOperators[operator] = allowed;
         emit ClaimOperatorUpdated(operator, allowed);
-    }
-
-    /**
-     * @notice Update fee token address
-     * @dev Only owner can call, new token address cannot be zero address
-     */
-    function setUnichatToken(address newUnichatToken) external onlyOwner {
-        require(newUnichatToken != address(0), "ZeroAddr");
-        UNICHAT = IERC20(newUnichatToken);
-        emit UnichatTokenUpdated(newUnichatToken);
     }
 
     /* ===================== Admin Functions ===================== */
